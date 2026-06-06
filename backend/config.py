@@ -65,6 +65,7 @@ ENTRY_START_HOUR: int = 9
 ENTRY_START_MIN: int = 35   # earliest bar for new entries; allows warm-up + skips gap-open noise
 FORCE_EXIT_HOUR: int = 15
 FORCE_EXIT_MIN: int = 10
+MIN_DAYS_TO_EXPIRY: int = 1  # skip expiry-day (0 DTE) options; roll to next week
 
 # ── Candle interval ───────────────────────────────────────────────────────────
 

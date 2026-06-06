@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from config import BROKERAGE_PER_ORDER, CAPITAL_PER_TRADE, LOT_SIZE, SLIPPAGE_PCT
+from config import BROKERAGE_PER_ORDER, CAPITAL_PER_TRADE, LOT_SIZE, MIN_DAYS_TO_EXPIRY, SLIPPAGE_PCT
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,11 @@ _RATE_LIMIT_SLEEP = 0.35   # seconds between historical_data calls (stay under 3
 # ── Expiry resolution ─────────────────────────────────────────────────────────
 
 def _nearest_expiry_on_or_after(entry_date: date, instruments_df: pd.DataFrame) -> Optional[date]:
-    """Earliest expiry in the instruments list that is >= entry_date."""
-    candidates = sorted(d for d in instruments_df["expiry"].unique() if d >= entry_date)
+    """Earliest expiry that has at least MIN_DAYS_TO_EXPIRY remaining from entry_date."""
+    candidates = sorted(
+        d for d in instruments_df["expiry"].unique()
+        if (d - entry_date).days >= MIN_DAYS_TO_EXPIRY
+    )
     return candidates[0] if candidates else None
 
 

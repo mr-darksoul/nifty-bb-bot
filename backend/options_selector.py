@@ -13,7 +13,7 @@ from typing import Optional, Tuple
 
 import pandas as pd
 
-from config import CAPITAL_PER_TRADE, LOT_SIZE, NFO_EXCHANGE, NIFTY_SYMBOL, SLIPPAGE_PCT
+from config import CAPITAL_PER_TRADE, LOT_SIZE, MIN_DAYS_TO_EXPIRY, NFO_EXCHANGE, NIFTY_SYMBOL, SLIPPAGE_PCT
 
 logger = logging.getLogger(__name__)
 
@@ -83,17 +83,28 @@ class OptionsSelector:
         return self._instruments_cache
 
     def get_weekly_expiry(self) -> date:
-        """Return the nearest weekly expiry date."""
+        """Return the nearest weekly expiry with at least MIN_DAYS_TO_EXPIRY remaining.
+
+        On expiry Thursday (0 DTE) this rolls forward to next week, avoiding
+        near-zero-time-value options with extreme gamma and poor liquidity.
+        """
         try:
             df = self._get_instruments()
             today = date.today()
             future_expiries = sorted(df["expiry"].unique())
-            upcoming = [e for e in future_expiries if e >= today]
+            upcoming = [e for e in future_expiries if (e - today).days >= MIN_DAYS_TO_EXPIRY]
             if upcoming:
-                return upcoming[0]
+                expiry = upcoming[0]
+                days_left = (expiry - today).days
+                logger.info(f'"Selected expiry: {expiry} ({days_left} DTE)"')
+                return expiry
         except Exception as exc:
             logger.warning(f'"Could not fetch expiry from instruments: {exc} — estimating"')
-        return _next_thursday()
+        # Fallback: next Thursday, skipping today if it is Thursday
+        fallback = _next_thursday()
+        if (fallback - date.today()).days < MIN_DAYS_TO_EXPIRY:
+            fallback = _next_thursday(fallback + timedelta(days=1))
+        return fallback
 
     def get_atm_instrument(
         self,
