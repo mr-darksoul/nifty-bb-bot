@@ -52,7 +52,14 @@ def compute_metrics(trades: pd.DataFrame, daily_pnl: pd.Series) -> Dict[str, Any
         initial_capital = 100_000.0   # assumed for CAGR normalisation
         final_value = initial_capital + metrics["total_pnl"]
         years = n_days / 365.25
-        metrics["cagr"] = ((final_value / initial_capital) ** (1 / years) - 1) if years > 0 else 0.0
+        if years <= 0:
+            metrics["cagr"] = 0.0
+        elif final_value <= 0:
+            # Lost >=100% of capital: CAGR is undefined (negative base to a
+            # fractional power → complex). Floor it at -100%.
+            metrics["cagr"] = -1.0
+        else:
+            metrics["cagr"] = (final_value / initial_capital) ** (1 / years) - 1
     else:
         metrics["cagr"] = 0.0
 
