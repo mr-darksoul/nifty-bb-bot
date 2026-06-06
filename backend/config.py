@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -54,7 +55,7 @@ LOT_SIZE: int = 65                       # NIFTY options lot size from NSE/FAOP/
 CAPITAL_PER_TRADE: float = 5_000.0       # ₹ maximum premium value per trade
 BROKERAGE_PER_ORDER: float = 20.0       # Zerodha flat ₹20
 SLIPPAGE_PCT: float = 0.0005            # 0.05% slippage each leg
-MAX_TRADES_PER_DAY: int = 3
+MAX_TRADES_PER_DAY: int = 2          # reduced from 3: fewer, higher-quality 1-min trades
 
 # ── Market session ────────────────────────────────────────────────────────────
 
@@ -88,11 +89,12 @@ DEFAULT_PARAMS: dict = {
     "sl_buffer": 0.10,
     "rsi_min": 35,
     "rsi_max": 65,
+    "min_atr_pct": 60.0,   # only trade when ATR is in top ~40% (move clears costs)
 }
 
 # ── ML thresholds ─────────────────────────────────────────────────────────────
 
-SIGNAL_QUALITY_THRESHOLD: float = 0.60
+SIGNAL_QUALITY_THRESHOLD: float = 0.70   # raised from 0.60: stricter ML gate, fewer trades
 CHOPPY_REGIME_ID: int = 1               # HMM state that means CHOPPY
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -106,14 +108,28 @@ TRADE_LOG_PATH: Path = BASE_DIR / "trades.csv"
 DATA_CACHE_PATH: Path = BASE_DIR / "nifty_1min.csv"
 
 
+_params_cache: Optional[dict] = None
+_params_cache_mtime: float = 0.0
+
+
 def load_optimized_params() -> dict:
-    """Load strategy parameters from optimizer output, falling back to defaults."""
+    """Load strategy parameters from optimizer output, falling back to defaults.
+
+    Result is cached in-process and only re-read when the file's mtime changes,
+    avoiding a JSON parse on every candle close (375×/day).
+    """
+    global _params_cache, _params_cache_mtime
     if OPTIMIZED_PARAMS_PATH.exists():
         try:
+            mtime = OPTIMIZED_PARAMS_PATH.stat().st_mtime
+            if _params_cache is not None and mtime == _params_cache_mtime:
+                return _params_cache.copy()
             with open(OPTIMIZED_PARAMS_PATH) as f:
                 params = json.load(f)
+            _params_cache = params
+            _params_cache_mtime = mtime
             logger.info('"Loaded optimized params from file"')
-            return params
+            return params.copy()
         except Exception as exc:
             logger.warning(f'"Failed to load optimized params: {exc} — using defaults"')
     else:

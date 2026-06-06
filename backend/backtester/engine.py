@@ -13,6 +13,7 @@ import pandas as pd
 
 from config import (
     BROKERAGE_PER_ORDER,
+    CANDLE_INTERVAL_MINUTES,
     LOT_SIZE,
     MAX_TRADES_PER_DAY,
     SLIPPAGE_PCT,
@@ -27,11 +28,6 @@ EXIT_REASON_TARGET = "TARGET"
 EXIT_REASON_SL = "STOP_LOSS"
 EXIT_REASON_FORCE = "FORCE_EXIT"
 EXIT_REASON_EOD = "EOD"
-
-
-def _estimate_option_premium(nifty_price: float, atr: float) -> float:
-    """Rough ATM option premium estimate: ~1 ATR value as proxy LTP."""
-    return max(atr * 1.0, 50.0)
 
 
 def run_backtest(
@@ -58,6 +54,12 @@ def run_backtest(
     bb_overbought: float = p["bb_overbought"]
     bb_exit: float = p["bb_exit"]
     sl_buffer: float = p["sl_buffer"]
+    rsi_min: float = float(p.get("rsi_min", 0))
+    rsi_max: float = float(p.get("rsi_max", 100))
+    # Volatility gate: only enter when ATR percentile >= this floor, so the
+    # expected reversion move is large enough to clear fixed per-trade costs.
+    # 0 disables the gate (back-compatible).
+    min_atr_pct: float = float(p.get("min_atr_pct", 0.0))
 
     required = ["percent_b", "rsi", "atr", "close", "high", "low"]
     missing = [c for c in required if c not in df.columns]
@@ -67,6 +69,13 @@ def run_backtest(
     pb = df["percent_b"]
     close = df["close"]
     atr_series = df["atr"]
+    # ATR percentile (rolling rank, 0–100). Absent in older frames → treat as
+    # always-passing so the gate is a no-op.
+    if "atr_pct" in df.columns:
+        atr_pct_series = df["atr_pct"]
+    else:
+        atr_pct_series = pd.Series(100.0, index=df.index)
+    rsi_series = df["rsi"] if "rsi" in df.columns else pd.Series(50.0, index=df.index)
     idx = df.index
 
     trades = []
@@ -147,6 +156,16 @@ def run_backtest(
             if hour < 9 or (hour == 9 and minute < 20):
                 continue
             if (hour == 15 and minute >= 10) or hour > 15:
+                continue
+
+            # Volatility gate: skip low-ATR bars where the move can't clear costs.
+            atr_pct_val = atr_pct_series.iloc[i]
+            if min_atr_pct > 0 and (pd.isna(atr_pct_val) or atr_pct_val < min_atr_pct):
+                continue
+
+            # RSI filter
+            rsi_val = rsi_series.iloc[i]
+            if not pd.isna(rsi_val) and not (rsi_min <= rsi_val <= rsi_max):
                 continue
 
             direction = 0
@@ -239,5 +258,5 @@ def _make_trade(
         "exit_price": round(exit_price, 2),
         "pnl": round(pnl, 2),
         "exit_reason": reason,
-        "duration_min": duration_bars * 5,
+        "duration_min": duration_bars * CANDLE_INTERVAL_MINUTES,
     }

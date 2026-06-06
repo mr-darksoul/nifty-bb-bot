@@ -30,8 +30,10 @@ FEATURE_COLUMNS: List[str] = [
     "day_of_week",
     "is_first_30min",
     "is_last_30min",
-    "volume_rank",
 ]
+# NOTE: volume_rank was removed — NIFTY index always has zero volume so the
+# column was a constant 0.5 in every row, adding no signal.  Retrain models
+# after this change.
 
 REGIME_FEATURE_COLUMNS: List[str] = [
     "log_return",
@@ -46,11 +48,15 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     Given an OHLCV DataFrame with a DatetimeIndex (IST), compute and return
     a feature matrix aligned to the same index.
 
+    If indicators (bb_upper etc.) are already present the compute_all step is
+    skipped, avoiding a second full pass when the caller pre-computed them.
+
     All NaN-producing rows (warm-up period) are retained but should be
     dropped by callers before feeding to models.
     """
     df = df.copy()
-    df = compute_all(df)
+    if "bb_upper" not in df.columns:
+        df = compute_all(df)
 
     # ── Derived %b features ───────────────────────────────────────────────────
     df["pb_velocity"] = df["percent_b"].diff(3)
@@ -74,9 +80,6 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["is_first_30min"] = (minutes_since_open <= 30).astype(float)
     df["is_last_30min"] = (minutes_since_open >= (trading_day_minutes - 30)).astype(float)
 
-    # ── Volume rank (always 0.5 for NIFTY index; placeholder for future use) ─
-    df["volume_rank"] = 0.5
-
     return df
 
 
@@ -84,9 +87,12 @@ def build_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute the feature subset used by the HMM regime detector.
     Returns a DataFrame with REGIME_FEATURE_COLUMNS.
+
+    Skips compute_all if indicators are already present.
     """
     df = df.copy()
-    df = compute_all(df)
+    if "bb_upper" not in df.columns:
+        df = compute_all(df)
 
     df["log_return"] = np.log(df["close"] / df["close"].shift(1))
     df["rolling_vol"] = df["log_return"].rolling(20).std()

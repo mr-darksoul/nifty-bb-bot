@@ -24,10 +24,11 @@ logger = logging.getLogger(__name__)
 PARAM_SPACE = {
     "bb_oversold":   (0.01, 0.15),
     "bb_overbought": (0.85, 0.99),
-    "bb_exit":       (0.35, 0.65),
+    "bb_exit":       (0.40, 0.90),   # wider: let target ride more of the reversion
     "sl_buffer":     (0.05, 0.20),
     "rsi_min":       (25, 45),
     "rsi_max":       (55, 75),
+    "min_atr_pct":   (40.0, 95.0),   # volatility floor: trade only big-enough moves
 }
 
 MIN_TRADES_IN_SAMPLE = 30
@@ -51,6 +52,7 @@ def _objective(
         "sl_buffer":     trial.suggest_float("sl_buffer",     *PARAM_SPACE["sl_buffer"]),
         "rsi_min":       trial.suggest_int("rsi_min",         *PARAM_SPACE["rsi_min"]),
         "rsi_max":       trial.suggest_int("rsi_max",         *PARAM_SPACE["rsi_max"]),
+        "min_atr_pct":   trial.suggest_float("min_atr_pct",   *PARAM_SPACE["min_atr_pct"]),
     }
 
     # Enforce logical constraints
@@ -150,7 +152,6 @@ def optimize(
 
 def save_params(params: Dict, path=OPTIMIZED_PARAMS_PATH) -> None:
     """Persist optimized parameters to JSON."""
-    path = OPTIMIZED_PARAMS_PATH if path is None else path
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Strip _meta for the live config file (keep a full copy with meta)

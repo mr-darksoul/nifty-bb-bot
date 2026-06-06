@@ -4,6 +4,7 @@ backend/.env
 *.env
 !.env.example
 !backend/.env.example
+backend/.kite_token
 
 # ── Python ────────────────────────────────────────────────────────────
 __pycache__/

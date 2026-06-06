@@ -253,7 +253,10 @@ class OrderManager:
 
     def today_trades(self) -> List[Trade]:
         today = datetime.now().date().isoformat()
-        return [t for t in self._trade_history if t.entry_time.startswith(today)]
+        closed = [t for t in self._trade_history if t.entry_time.startswith(today)]
+        if self._active_trade and self._active_trade.entry_time.startswith(today):
+            return closed + [self._active_trade]
+        return closed
 
     def today_pnl(self) -> float:
         return sum(t.pnl for t in self.today_trades())

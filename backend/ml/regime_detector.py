@@ -124,8 +124,10 @@ class RegimeDetector:
             Canonical regime id (0, 1, 2). Returns CHOPPY(1) as default if model unavailable.
         """
         if not self._loaded or self.model is None:
-            logger.warning('"Regime model not loaded — defaulting to CHOPPY"')
-            return CHOPPY_REGIME_ID
+            # Default to TRENDING_DOWN (blocks entry) rather than CHOPPY (allows entry),
+            # so a missing model is a safe failure — no unfiltered trades.
+            logger.warning('"Regime model not loaded — defaulting to TRENDING_DOWN (entries blocked)"')
+            return 0
 
         X = feature_window.dropna().values.astype(np.float64)
         if len(X) < 10:
@@ -140,8 +142,8 @@ class RegimeDetector:
             )
             return regime
         except Exception as exc:
-            logger.error(f'"Regime prediction failed: {exc} — defaulting CHOPPY"')
-            return CHOPPY_REGIME_ID
+            logger.error(f'"Regime prediction failed: {exc} — defaulting TRENDING_DOWN (entries blocked)"')
+            return 0
 
     def is_choppy(self, feature_window: pd.DataFrame) -> bool:
         """Convenience: True when regime is CHOPPY (trades allowed)."""

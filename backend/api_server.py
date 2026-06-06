@@ -8,6 +8,7 @@ import secrets
 import json
 import logging
 import os
+import time as _time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -42,7 +43,6 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5500",
         "http://127.0.0.1:5500",
-        "null",
     ],
     allow_credentials=False,
     allow_methods=["*"],
@@ -54,28 +54,30 @@ app.add_middleware(
 class BotState:
     """Singleton holding live bot runtime state."""
 
-    bot_running: bool = False
-    market_open: bool = False
-    regime: int = -1
-    regime_name: str = "UNKNOWN"
-    active_trade: Optional[Dict] = None
-    trades_today: int = 0
-    daily_pnl: float = 0.0
-    nifty_price: float = 0.0
-    percent_b: float = 0.0
-    rsi: float = 0.0
-    atr: float = 0.0
-    signal: str = "NONE"
-    signal_quality_score: float = 0.0
-    last_candle_time: str = ""
-    order_manager: Optional[Any] = None
-    data_feed: Optional[Any] = None
-    _start_fn: Optional[Any] = None
-    _stop_fn: Optional[Any] = None
+    def __init__(self) -> None:
+        self.bot_running: bool = False
+        self.market_open: bool = False
+        self.regime: int = -1
+        self.regime_name: str = "UNKNOWN"
+        self.active_trade: Optional[Dict] = None
+        self.trades_today: int = 0
+        self.daily_pnl: float = 0.0
+        self.nifty_price: float = 0.0
+        self.percent_b: float = 0.0
+        self.rsi: float = 0.0
+        self.atr: float = 0.0
+        self.signal: str = "NONE"
+        self.signal_quality_score: float = 0.0
+        self.last_candle_time: str = ""
+        self.order_manager: Optional[Any] = None
+        self.data_feed: Optional[Any] = None
+        self._start_fn: Optional[Any] = None
+        self._stop_fn: Optional[Any] = None
 
 
 state = BotState()
 _ws_clients: List[WebSocket] = []
+_ws_tickets: Dict[str, float] = {}  # ticket → expiry unix timestamp
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -106,12 +108,22 @@ def require_api_token(
         raise HTTPException(status_code=401, detail="Invalid API token")
 
 
-async def _accept_authorized_ws(websocket: WebSocket, token: Optional[str]) -> bool:
-    """Validate WebSocket auth before accepting the connection."""
-    if not API_AUTH_TOKEN or not token or not secrets.compare_digest(token, API_AUTH_TOKEN):
+async def _accept_authorized_ws(websocket: WebSocket, ticket: Optional[str]) -> bool:
+    """Accept the WebSocket then validate the one-time ticket.
+
+    Must accept before closing — closing an unaccepted WS raises in some
+    Starlette versions.  Tickets are issued by POST /ws/ticket and expire
+    after 30 s, so the real API token never appears in WS URLs or logs.
+    """
+    await websocket.accept()
+    now = _time.time()
+    # Purge stale tickets
+    for k in [k for k, exp in list(_ws_tickets.items()) if exp < now]:
+        del _ws_tickets[k]
+    if not ticket or ticket not in _ws_tickets:
         await websocket.close(code=1008)
         return False
-    await websocket.accept()
+    del _ws_tickets[ticket]
     return True
 
 
@@ -252,7 +264,7 @@ async def get_trade_history():
     return JSONResponse(content=[], status_code=200)
 
 
-@app.get("/backtest/run", dependencies=[Depends(require_api_token)])
+@app.post("/backtest/run", dependencies=[Depends(require_api_token)])
 async def run_backtest_endpoint() -> Dict:
     """Run backtester on the most recent cached data and return metrics."""
     try:
@@ -287,8 +299,8 @@ async def run_backtest_endpoint() -> Dict:
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f'"Backtest endpoint error: {exc}"')
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f'"Backtest endpoint error: {exc}"', exc_info=True)
+        raise HTTPException(status_code=500, detail="Backtest failed — check server logs")
 
 
 @app.get("/model/status", dependencies=[Depends(require_api_token)])
@@ -318,6 +330,19 @@ async def get_model_status() -> Dict:
     }
 
 
+@app.post("/ws/ticket", dependencies=[Depends(require_api_token)])
+async def get_ws_ticket() -> Dict:
+    """Issue a one-time WebSocket auth ticket valid for 30 seconds.
+
+    The frontend exchanges its API token (in a header) for a short-lived
+    ticket, then passes that ticket as a query param in the WS URL.  This
+    keeps the durable API token out of access logs and browser history.
+    """
+    ticket = secrets.token_urlsafe(32)
+    _ws_tickets[ticket] = _time.time() + 30
+    return {"ticket": ticket}
+
+
 @app.post("/bot/start", dependencies=[Depends(require_api_token)])
 async def start_bot() -> Dict:
     """Start the trading loop as a background asyncio task."""
@@ -329,8 +354,8 @@ async def start_bot() -> Dict:
         await state._start_fn()
         return {"status": "started", "dry_run": DRY_RUN}
     except Exception as exc:
-        logger.error(f'"Bot start failed: {exc}"')
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f'"Bot start failed: {exc}"', exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot start failed — check server logs")
 
 
 @app.post("/bot/stop", dependencies=[Depends(require_api_token)])
@@ -344,8 +369,8 @@ async def stop_bot() -> Dict:
         await state._stop_fn()
         return {"status": "stopped"}
     except Exception as exc:
-        logger.error(f'"Bot stop failed: {exc}"')
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f'"Bot stop failed: {exc}"', exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot stop failed — check server logs")
 
 
 @app.get("/auth/login-url", dependencies=[Depends(require_api_token)])

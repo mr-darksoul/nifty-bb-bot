@@ -26,12 +26,12 @@ function fmtInr(n)        { return n == null ? "—" : "₹" + Number(n).toLocal
 function el(id)           { return document.getElementById(id); }
 
 function getApiToken() {
-  let token = localStorage.getItem(API_TOKEN_STORAGE_KEY) || "";
+  let token = sessionStorage.getItem(API_TOKEN_STORAGE_KEY) || "";
   if (!token && !apiTokenPrompted) {
     apiTokenPrompted = true;
     token = window.prompt("Enter dashboard API token") || "";
     token = token.trim();
-    if (token) localStorage.setItem(API_TOKEN_STORAGE_KEY, token);
+    if (token) sessionStorage.setItem(API_TOKEN_STORAGE_KEY, token);
   }
   return token;
 }
@@ -41,9 +41,12 @@ function authHeaders() {
   return token ? { "X-API-Token": token } : {};
 }
 
-function wsUrl() {
-  const token = encodeURIComponent(getApiToken());
-  return BACKEND_URL.replace(/^http/, "ws") + "/ws/live?token=" + token;
+async function fetchWsTicket() {
+  // Exchange the API token (sent in a header) for a short-lived one-time
+  // ticket.  The ticket goes in the WS URL; the durable token stays out of
+  // access logs and browser history.
+  const d = await postJSON("/ws/ticket", null);
+  return d.ticket;
 }
 
 function toast(msg, type = "info") {
@@ -370,10 +373,20 @@ function updateModelStatus(data) {
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
-function connectWS() {
+async function connectWS() {
   if (ws && ws.readyState <= 1) return;
 
-  ws = new WebSocket(wsUrl());
+  let ticket;
+  try {
+    ticket = await fetchWsTicket();
+  } catch (e) {
+    console.error("WS ticket fetch failed:", e);
+    wsRetryTimer = setTimeout(connectWS, 5000);
+    return;
+  }
+
+  const wsUrl = BACKEND_URL.replace(/^http/, "ws") + "/ws/live?token=" + encodeURIComponent(ticket);
+  ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     el("conn-dot").className   = "connected";
@@ -408,12 +421,14 @@ function connectWS() {
 
 // ── REST polling ──────────────────────────────────────────────────────────────
 
+function _clearStoredToken() {
+  sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
+  apiTokenPrompted = false;
+}
+
 async function fetchJSON(path) {
   const resp = await fetch(BACKEND_URL + path, { headers: authHeaders() });
-  if (resp.status === 401 || resp.status === 503) {
-    localStorage.removeItem(API_TOKEN_STORAGE_KEY);
-    apiTokenPrompted = false;
-  }
+  if (resp.status === 401 || resp.status === 503) _clearStoredToken();
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
@@ -422,12 +437,9 @@ async function postJSON(path, body) {
   const resp = await fetch(BACKEND_URL + path, {
     method:  "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body:    body ? JSON.stringify(body) : undefined,
+    body:    body != null ? JSON.stringify(body) : undefined,
   });
-  if (resp.status === 401 || resp.status === 503) {
-    localStorage.removeItem(API_TOKEN_STORAGE_KEY);
-    apiTokenPrompted = false;
-  }
+  if (resp.status === 401 || resp.status === 503) _clearStoredToken();
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
@@ -470,6 +482,13 @@ async function pollStatus() {
     const s = await fetchJSON("/status");
     updateBotBadge(s.bot_running, s.market_open);
     updateControls(s);
+    // Show server-side DRY_RUN value as read-only (it is an env var, not
+    // togglable from the dashboard).
+    const dryEl = el("dry-run-status");
+    if (dryEl) {
+      dryEl.textContent = s.dry_run ? "ON" : "LIVE";
+      dryEl.style.color = s.dry_run ? "var(--yellow, #d29922)" : "var(--red, #f85149)";
+    }
   } catch (e) { /* ignore — WS gives the same info */ }
 }
 
@@ -507,7 +526,7 @@ el("btn-run-bt").addEventListener("click", async () => {
   el("bt-status").textContent = "Running backtest…";
   try {
     initBacktestChart();
-    const data = await fetchJSON("/backtest/run");
+    const data = await postJSON("/backtest/run", null);
     renderBacktestResults(data);
     el("bt-status").textContent = "Done ✓";
   } catch (e) {
@@ -538,10 +557,7 @@ el("btn-submit-token").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body:    JSON.stringify({ request_token: token }),
     });
-    if (resp.status === 401 || resp.status === 503) {
-      localStorage.removeItem(API_TOKEN_STORAGE_KEY);
-      apiTokenPrompted = false;
-    }
+    if (resp.status === 401 || resp.status === 503) _clearStoredToken();
     if (!resp.ok) {
       const err = await resp.json();
       throw new Error(err.detail || resp.status);

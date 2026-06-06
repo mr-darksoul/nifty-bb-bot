@@ -65,11 +65,14 @@ class CandleBuilder:
 
         self.last_price = price
 
+        # Collect closed-candle data under lock, then fire callbacks outside lock
+        # to avoid blocking tick processing while callbacks do I/O or compute.
+        closed_df = None
         with self._lock:
             bucket = self._candle_bucket(ts)
             if self._current is None or self._current["bucket"] != bucket:
                 if self._current is not None:
-                    self._close_candle()
+                    closed_df = self._close_candle_locked()
                 self._current = {
                     "bucket": bucket,
                     "datetime": bucket,
@@ -87,14 +90,25 @@ class CandleBuilder:
                 c["close"] = price
                 c["tick_count"] += 1
 
+        if closed_df is not None:
+            for cb in list(self._callbacks):
+                try:
+                    cb(closed_df)
+                except Exception as exc:
+                    logger.error(f'"Candle callback error: {exc}"')
+
     def _candle_bucket(self, ts: datetime) -> datetime:
         """Round timestamp down to the nearest N-minute interval."""
         total_minutes = ts.hour * 60 + ts.minute
         floored = (total_minutes // self.interval) * self.interval
         return ts.replace(hour=floored // 60, minute=floored % 60, second=0, microsecond=0)
 
-    def _close_candle(self) -> None:
-        """Finalise current candle, store it, fire callbacks. Must be called under lock."""
+    def _close_candle_locked(self) -> pd.DataFrame:
+        """Finalise current candle and store it. Must be called under lock.
+
+        Returns the completed candle DataFrame for callbacks to consume
+        after the lock is released.
+        """
         c = self._current.copy()
         c.pop("bucket", None)
         self._candles.append(c)
@@ -102,12 +116,7 @@ class CandleBuilder:
             f'"Candle closed: {c["datetime"]} O={c["open"]:.2f} H={c["high"]:.2f} '
             f'L={c["low"]:.2f} C={c["close"]:.2f}"'
         )
-        df = self.get_dataframe()
-        for cb in self._callbacks:
-            try:
-                cb(df)
-            except Exception as exc:
-                logger.error(f'"Candle callback error: {exc}"')
+        return self.get_dataframe()
 
     def get_dataframe(self) -> pd.DataFrame:
         """Return the full candle history as a DataFrame."""

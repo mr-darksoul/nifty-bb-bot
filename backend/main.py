@@ -134,9 +134,10 @@ async def process_candle(df: pd.DataFrame) -> None:
         return
 
     # ── Step 1: Compute indicators ────────────────────────────────────────────
+    # Pass pre-computed df_ind into build_features so compute_all runs only once.
     try:
         df_ind = compute_all(df.copy())
-        df_feat = build_features(df_ind)
+        df_feat = build_features(df_ind)   # skips recompute since bb_upper present
     except Exception as exc:
         logger.error(f'"Indicator computation failed: {exc}"')
         notify_error("Indicator computation", str(exc))
@@ -167,10 +168,10 @@ async def process_candle(df: pd.DataFrame) -> None:
         state.regime = current_regime
         state.regime_name = REGIME_NAMES.get(current_regime, "UNKNOWN")
     except Exception as exc:
-        logger.warning(f'"Regime detection failed: {exc} — assuming CHOPPY"')
-        current_regime = CHOPPY_REGIME_ID
+        logger.warning(f'"Regime detection failed: {exc} — blocking entry (TRENDING_DOWN)"')
+        current_regime = 0  # TRENDING_DOWN — blocks entry; safe failure
         state.regime = current_regime
-        state.regime_name = "CHOPPY"
+        state.regime_name = "UNKNOWN"
 
     if current_regime != CHOPPY_REGIME_ID:
         pb = float(df_feat.iloc[-1].get("percent_b", 0) or 0)
@@ -191,6 +192,13 @@ async def process_candle(df: pd.DataFrame) -> None:
 
     if direction is None:
         state.signal = "NONE"
+        return
+
+    # RSI filter
+    rsi_val = float(last.get("rsi", 50) or 50)
+    if not (params["rsi_min"] <= rsi_val <= params["rsi_max"]):
+        logger.info(f'"Signal skipped: RSI={rsi_val:.1f} outside [{params["rsi_min"]}, {params["rsi_max"]}]"')
+        state.signal = "FILTERED_RSI"
         return
 
     # Step 4: ML signal quality score

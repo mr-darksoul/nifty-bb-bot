@@ -7,9 +7,10 @@ Handles the two-step auth:
   3. Persist access_token in environment for the current process lifetime
 """
 
-import hashlib
 import logging
 import os
+import stat
+from pathlib import Path
 from typing import Optional
 
 from config import KITE_API_KEY, KITE_API_SECRET
@@ -17,6 +18,24 @@ from config import KITE_API_KEY, KITE_API_SECRET
 logger = logging.getLogger(__name__)
 
 _kite_instance = None
+_TOKEN_FILE = Path(__file__).parent / ".kite_token"
+
+
+def _save_token_to_file(token: str) -> None:
+    try:
+        _TOKEN_FILE.write_text(token)
+        _TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # owner read/write only
+    except Exception as exc:
+        logger.warning(f'"Could not persist access token to file: {exc}"')
+
+
+def _load_token_from_file() -> str:
+    try:
+        if _TOKEN_FILE.exists():
+            return _TOKEN_FILE.read_text().strip()
+    except Exception:
+        pass
+    return ""
 
 
 def get_kite():
@@ -32,7 +51,7 @@ def get_kite():
             raise ValueError("KITE_API_KEY environment variable is not set")
 
         _kite_instance = KiteConnect(api_key=KITE_API_KEY)
-        current_token = os.getenv("KITE_ACCESS_TOKEN", "")
+        current_token = os.getenv("KITE_ACCESS_TOKEN", "") or _load_token_from_file()
         if current_token:
             _kite_instance.set_access_token(current_token)
             logger.info('"KiteConnect initialised with existing access token"')
@@ -72,6 +91,7 @@ def exchange_request_token(request_token: str) -> str:
         access_token: str = data["access_token"]
         kite.set_access_token(access_token)
         os.environ["KITE_ACCESS_TOKEN"] = access_token
+        _save_token_to_file(access_token)
         logger.info('"Kite session generated successfully"')
         return access_token
     except Exception as exc:
