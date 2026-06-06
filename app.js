@@ -444,19 +444,6 @@ async function postJSON(path, body) {
   return resp.json();
 }
 
-async function postJSON(path, body) {
-  const resp = await fetch(BACKEND_URL + path, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body:    body ? JSON.stringify(body) : undefined,
-  });
-  if (resp.status === 401 || resp.status === 503) {
-    localStorage.removeItem(API_TOKEN_STORAGE_KEY);
-    apiTokenPrompted = false;
-  }
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
-}
 
 async function loadCandles() {
   if (!candleSeries) return;
