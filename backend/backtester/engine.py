@@ -14,6 +14,8 @@ import pandas as pd
 from config import (
     BROKERAGE_PER_ORDER,
     CANDLE_INTERVAL_MINUTES,
+    ENTRY_START_HOUR,
+    ENTRY_START_MIN,
     LOT_SIZE,
     MAX_TRADES_PER_DAY,
     SLIPPAGE_PCT,
@@ -109,7 +111,8 @@ def run_backtest(
             )
             trades.append(_make_trade(
                 entry_time, ts, entry_direction, entry_price, close.iloc[i],
-                pnl, EXIT_REASON_FORCE, i - entry_iloc
+                pnl, EXIT_REASON_FORCE, i - entry_iloc,
+                int(round(entry_spot / 50) * 50),
             ))
             in_trade = False
             continue
@@ -145,15 +148,15 @@ def run_backtest(
                 )
                 trades.append(_make_trade(
                     entry_time, ts, entry_direction, entry_price, close.iloc[i],
-                    pnl, reason, i - entry_iloc
+                    pnl, reason, i - entry_iloc,
+                    int(round(entry_spot / 50) * 50),
                 ))
                 in_trade = False
                 continue
 
         # ── Entry signals (if not in trade + trade limits ok) ─────────────────
         if not in_trade and trades_today < MAX_TRADES_PER_DAY:
-            # Market must be open (≥ 9:20 AM to allow at least one warm-up bar)
-            if hour < 9 or (hour == 9 and minute < 20):
+            if hour < ENTRY_START_HOUR or (hour == ENTRY_START_HOUR and minute < ENTRY_START_MIN):
                 continue
             if (hour == 15 and minute >= 10) or hour > 15:
                 continue
@@ -181,6 +184,7 @@ def run_backtest(
                 entry_pb = pb_val
                 entry_price = close.iloc[i] * (1 + direction * SLIPPAGE_PCT)  # slippage on entry
                 entry_time = ts
+                entry_spot = close.iloc[i]
                 sl_pb = entry_pb - direction * sl_buffer
                 trades_today += 1
 
@@ -193,7 +197,8 @@ def run_backtest(
         )
         trades.append(_make_trade(
             entry_time, idx[i], entry_direction, entry_price, close.iloc[i],
-            pnl, EXIT_REASON_EOD, i - entry_iloc
+            pnl, EXIT_REASON_EOD, i - entry_iloc,
+            int(round(entry_spot / 50) * 50),
         ))
 
     # ── Assemble results ───────────────────────────────────────────────────────
@@ -249,6 +254,7 @@ def _make_trade(
     pnl: float,
     reason: str,
     duration_bars: int,
+    atm_strike: int = 0,
 ) -> dict:
     return {
         "entry_time": entry_time,
@@ -259,4 +265,5 @@ def _make_trade(
         "pnl": round(pnl, 2),
         "exit_reason": reason,
         "duration_min": duration_bars * CANDLE_INTERVAL_MINUTES,
+        "atm_strike": atm_strike,
     }

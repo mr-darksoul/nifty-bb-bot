@@ -69,6 +69,7 @@ class BotState:
         self.signal: str = "NONE"
         self.signal_quality_score: float = 0.0
         self.last_candle_time: str = ""
+        self.strike_candidates: list = []  # [{strike, symbol, ltp, status}] from last option selection
         self.order_manager: Optional[Any] = None
         self.data_feed: Optional[Any] = None
         self._start_fn: Optional[Any] = None
@@ -169,6 +170,7 @@ async def get_status() -> Dict:
         "active_trade": active,
         "trades_today": state.trades_today,
         "daily_pnl": round(state.daily_pnl, 2),
+        "strike_candidates": state.strike_candidates,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -463,6 +465,7 @@ async def ws_live(websocket: WebSocket, token: Optional[str] = Query(default=Non
                 "active_trade": active,
                 "daily_pnl": round(state.daily_pnl, 2),
                 "trades_today": state.trades_today,
+                "strike_candidates": state.strike_candidates,
                 "timestamp": datetime.now().isoformat(),
             }
             await websocket.send_json(payload)

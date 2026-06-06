@@ -33,6 +33,8 @@ from config import (
     CANDLE_INTERVAL_MINUTES,
     CHOPPY_REGIME_ID,
     DRY_RUN,
+    ENTRY_START_HOUR,
+    ENTRY_START_MIN,
     FORCE_EXIT_HOUR,
     FORCE_EXIT_MIN,
     MARKET_OPEN_HOUR,
@@ -90,6 +92,11 @@ def _market_open() -> bool:
 def _is_force_exit_time() -> bool:
     now = datetime.now().time()
     return now >= dtime(FORCE_EXIT_HOUR, FORCE_EXIT_MIN)
+
+
+def _is_entry_allowed() -> bool:
+    now = datetime.now().time()
+    return now >= dtime(ENTRY_START_HOUR, ENTRY_START_MIN)
 
 
 def _refresh_state(df: pd.DataFrame) -> None:
@@ -159,6 +166,8 @@ async def process_candle(df: pd.DataFrame) -> None:
     if order_manager.has_open_position:
         return
     if len(order_manager.today_trades()) >= MAX_TRADES_PER_DAY:
+        return
+    if not _is_entry_allowed():
         return
 
     # Step 2: Regime filter
@@ -273,6 +282,7 @@ async def _do_entry(
             option_type=direction,
             expiry=expiry,
         )
+        state.strike_candidates = list(options_selector.last_candidates)
 
         trade = order_manager.enter_trade(
             direction=direction,

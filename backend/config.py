@@ -61,6 +61,8 @@ MAX_TRADES_PER_DAY: int = 2          # reduced from 3: fewer, higher-quality 1-m
 
 MARKET_OPEN_HOUR: int = 9
 MARKET_OPEN_MIN: int = 15
+ENTRY_START_HOUR: int = 9
+ENTRY_START_MIN: int = 35   # earliest bar for new entries; allows warm-up + skips gap-open noise
 FORCE_EXIT_HOUR: int = 15
 FORCE_EXIT_MIN: int = 10
 

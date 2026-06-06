@@ -56,6 +56,7 @@ class OptionsSelector:
     def __init__(self) -> None:
         self._instruments_cache: Optional[pd.DataFrame] = None
         self._cache_date: Optional[date] = None
+        self.last_candidates: list = []  # [{strike, symbol, ltp, status}] from last get_premium_capped_instrument call
 
     def _get_instruments(self) -> pd.DataFrame:
         """Fetch NFO instrument list, cached for the trading day."""
@@ -199,6 +200,9 @@ class OptionsSelector:
             logger.warning(f'"Batch LTP fetch failed: {exc} — falling back to per-symbol"')
             batch_quotes = {}
 
+        self.last_candidates = []
+        selected: Optional[tuple] = None
+
         for _, row in top.iterrows():
             symbol = str(row["tradingsymbol"])
             strike = int(row["strike"])
@@ -208,14 +212,31 @@ class OptionsSelector:
             ltp = float(ltp_data.get("last_price", 0)) if ltp_data else 0.0
             if ltp <= 0:
                 ltp = self.get_ltp(token, symbol)  # per-symbol fallback
+
             if ltp <= 0:
-                continue
-            if ltp <= max_ltp:
-                logger.info(
-                    f'"Selected premium-capped option: {symbol} strike={strike} '
-                    f'ltp={ltp:.2f} max_ltp={max_ltp:.2f} cap={max_trade_value:.2f}"'
-                )
-                return symbol, strike, token, ltp
+                status = "NO_LTP"
+            elif ltp > max_ltp:
+                status = "CAP_EXCEEDED"
+            elif selected is None:
+                status = "SELECTED"
+                selected = (symbol, strike, token, ltp)
+            else:
+                status = "AVAILABLE"
+
+            self.last_candidates.append({
+                "strike": strike,
+                "symbol": symbol,
+                "ltp": round(ltp, 2),
+                "status": status,
+            })
+
+        if selected:
+            sym, stk, tok, ltp_val = selected
+            logger.info(
+                f'"Selected premium-capped option: {sym} strike={stk} '
+                f'ltp={ltp_val:.2f} max_ltp={max_ltp:.2f} cap={max_trade_value:.2f}"'
+            )
+            return sym, stk, tok, ltp_val
 
         raise ValueError(
             f"No {option_type} option under premium cap ₹{max_trade_value:.2f} "
