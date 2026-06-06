@@ -440,12 +440,12 @@ function updateModelStatus(data) {
   el("ms-sharpe").textContent = oos != null ? fmt(oos, 2) : "—";
 
   const v = params.values || {};
-  el("p-oversold").textContent  = v.bb_oversold  != null ? fmt(v.bb_oversold, 3)  : "—";
-  el("p-overbought").textContent = v.bb_overbought != null ? fmt(v.bb_overbought, 3) : "—";
-  el("p-exit").textContent      = v.bb_exit       != null ? fmt(v.bb_exit, 3)      : "—";
-  el("p-sl").textContent        = v.sl_buffer     != null ? fmt(v.sl_buffer, 3)    : "—";
-  el("p-rsi-min").textContent   = v.rsi_min       != null ? v.rsi_min              : "—";
-  el("p-rsi-max").textContent   = v.rsi_max       != null ? v.rsi_max              : "—";
+  if (v.bb_oversold  != null) el("p-oversold").value  = fmt(v.bb_oversold, 3);
+  if (v.bb_overbought != null) el("p-overbought").value = fmt(v.bb_overbought, 3);
+  if (v.bb_exit       != null) el("p-exit").value      = fmt(v.bb_exit, 3);
+  if (v.sl_buffer     != null) el("p-sl").value        = fmt(v.sl_buffer, 3);
+  if (v.rsi_min       != null) el("p-rsi-min").value   = v.rsi_min;
+  if (v.rsi_max       != null) el("p-rsi-max").value   = v.rsi_max;
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -519,6 +519,21 @@ async function postJSON(path, body) {
   });
   if (resp.status === 401 || resp.status === 503) _clearStoredToken();
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+async function putJSON(path, body) {
+  const resp = await fetch(BACKEND_URL + path, {
+    method:  "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body:    JSON.stringify(body),
+  });
+  if (resp.status === 401 || resp.status === 503) _clearStoredToken();
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try { const j = await resp.json(); detail = j.detail || detail; } catch (_) {}
+    throw new Error(detail);
+  }
   return resp.json();
 }
 
@@ -600,6 +615,41 @@ el("btn-run-bt").addEventListener("click", async () => {
 });
 
 el("btn-reload-model").addEventListener("click", () => { loadModelStatus(); toast("Model status refreshed"); });
+
+el("btn-save-params").addEventListener("click", async () => {
+  const statusEl = el("params-save-status");
+  const btn = el("btn-save-params");
+
+  const payload = {
+    bb_oversold:  parseFloat(el("p-oversold").value),
+    bb_overbought: parseFloat(el("p-overbought").value),
+    bb_exit:      parseFloat(el("p-exit").value),
+    sl_buffer:    parseFloat(el("p-sl").value),
+    rsi_min:      parseInt(el("p-rsi-min").value, 10),
+    rsi_max:      parseInt(el("p-rsi-max").value, 10),
+  };
+
+  for (const [k, v] of Object.entries(payload)) {
+    if (isNaN(v)) { toast(`Invalid value for ${k}`, "error"); return; }
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = "Saving…";
+  statusEl.style.color = "var(--muted)";
+  try {
+    await putJSON("/params", payload);
+    statusEl.textContent = "Saved ✓";
+    statusEl.style.color = "var(--green)";
+    toast("Parameters saved — live bot and next backtest will use new values", "ok");
+    setTimeout(() => { statusEl.textContent = ""; }, 4000);
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+    statusEl.style.color = "var(--red)";
+    toast("Failed to save parameters: " + e.message, "error");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 el("btn-get-url").addEventListener("click", async () => {
   try {
