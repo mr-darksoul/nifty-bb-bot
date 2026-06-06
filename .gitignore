@@ -1,0 +1,30 @@
+# ── Secrets ───────────────────────────────────────────────────────────
+.env
+backend/.env
+*.env
+!.env.example
+!backend/.env.example
+
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ── Trade logs & data (regenerated at runtime / training) ─────────────
+backend/trades.csv
+backend/nifty_5min.csv
+
+# ── OS / editor ───────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ── Build / deploy ────────────────────────────────────────────────────
+*.log
+.gcloud/
