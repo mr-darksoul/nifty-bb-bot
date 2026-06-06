@@ -214,10 +214,14 @@
         <div id="backtest-equity-chart"></div>
         <div id="bt-status" class="text-muted" style="font-size:11px;padding-top:6px;"></div>
         <div id="bt-price-mode" style="font-size:10px;color:var(--muted);padding-top:2px;"></div>
-        <div style="margin-top:8px;max-height:160px;overflow-y:auto;">
+        <div style="margin-top:8px;max-height:220px;overflow-y:auto;">
           <table class="trade-table" id="bt-trades-table" style="font-size:10px;display:none;">
             <thead>
-              <tr><th>Time</th><th>Dir</th><th>Strike</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr>
+              <tr>
+                <th>Date</th><th>Entry</th><th>Exit</th><th>Dir</th><th>Strike</th>
+                <th>Symbol</th><th>DTE</th><th>Entry ₹</th><th>Exit ₹</th>
+                <th>Qty</th><th>P&amp;L</th><th>Reason</th>
+              </tr>
             </thead>
             <tbody id="bt-trades-tbody"></tbody>
           </table>

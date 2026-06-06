@@ -345,13 +345,18 @@ function renderBacktestResults(data) {
   el("bt-sharpe").className = "value " + (parseFloat(m.sharpe) >= 0 ? "pos" : "neg");
 
   const modeEl = el("bt-price-mode");
-  if (modeEl && data.price_mode) {
-    const isReal = data.price_mode === "real_options";
-    const isMixed = data.price_mode.startsWith("mixed_");
-    modeEl.textContent = isReal ? "✓ Real option prices"
-                       : isMixed ? `⚠ ${data.price_mode.replace(/_/g," ")}`
-                       : "~ Delta proxy (0.45×spot)";
-    modeEl.style.color = isReal ? "var(--green)" : isMixed ? "var(--yellow)" : "var(--muted)";
+  if (modeEl) {
+    const w = data.data_window || {};
+    const priced = data.priced_trades ?? 0;
+    const cand = data.candidate_trades ?? 0;
+    if (priced > 0) {
+      modeEl.textContent = `✓ Real Kite option prices — ${priced} of ${cand} signals in data window`
+        + (w.start ? ` (${w.start} → ${w.end})` : "");
+      modeEl.style.color = "var(--green)";
+    } else {
+      modeEl.textContent = `⚠ No signals fell inside Kite's option-data window (${cand} candidate signals, all on expired contracts)`;
+      modeEl.style.color = "var(--yellow)";
+    }
   }
 
   // Build equity curve from trades
@@ -376,26 +381,41 @@ function renderBacktestResults(data) {
     if (deduped.length > 0) btEquitySeries.setData(deduped);
   }
 
-  // Backtest trades table
+  // Backtest trades table — full detail
   const btTbody = el("bt-trades-tbody");
   const btTable = el("bt-trades-table");
-  if (btTbody && data.trades && data.trades.length) {
-    btTable.style.display = "";
-    btTbody.innerHTML = data.trades.map(t => {
-      const pnl = parseFloat(t.pnl || 0);
-      const pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
-      const entryTime = t.entry_time ? String(t.entry_time).split("T")[1]?.substring(0,5) : "—";
-      const strike = t.atm_strike || "—";
-      return `<tr class="${pnl >= 0 ? 'win' : 'loss'}">
-        <td>${entryTime}</td>
-        <td><span class="badge ${t.direction==='CE'?'green':'red'}" style="padding:1px 4px;font-size:9px;">${t.direction}</span></td>
-        <td class="text-mono">${strike}</td>
-        <td>${fmt(t.entry_price,2)}</td>
-        <td>${fmt(t.exit_price,2)}</td>
-        <td class="${pnlClass}">${fmtInr(pnl)}</td>
-        <td style="font-size:9px;">${t.exit_reason||"—"}</td>
-      </tr>`;
-    }).join("");
+  if (btTbody && btTable) {
+    if (data.trades && data.trades.length) {
+      btTable.style.display = "";
+      btTbody.innerHTML = data.trades.map(t => {
+        const pnl = parseFloat(t.pnl || 0);
+        const pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
+        const parts = t.entry_time ? String(t.entry_time).split("T") : ["—",""];
+        const dateStr  = parts[0];
+        const entryClk = (parts[1] || "").substring(0,5) || "—";
+        const exitClk  = t.exit_time ? String(t.exit_time).split("T")[1]?.substring(0,5) : "—";
+        const strike = t.atm_strike || "—";
+        const sym = (t.option_symbol || "—");
+        const dte = (t.dte != null) ? t.dte : "—";
+        return `<tr class="${pnl >= 0 ? 'win' : 'loss'}">
+          <td>${dateStr}</td>
+          <td>${entryClk}</td>
+          <td>${exitClk}</td>
+          <td><span class="badge ${t.direction==='CE'?'green':'red'}" style="padding:1px 4px;font-size:9px;">${t.direction}</span></td>
+          <td class="text-mono">${strike}</td>
+          <td class="text-mono" style="font-size:9px;">${sym}</td>
+          <td>${dte}</td>
+          <td>${fmt(t.entry_price,2)}</td>
+          <td>${fmt(t.exit_price,2)}</td>
+          <td>${t.quantity || "—"}</td>
+          <td class="${pnlClass}">${fmtInr(pnl)}</td>
+          <td style="font-size:9px;">${t.exit_reason||"—"}</td>
+        </tr>`;
+      }).join("");
+    } else {
+      btTable.style.display = "none";
+      btTbody.innerHTML = "";
+    }
   }
 }
 
