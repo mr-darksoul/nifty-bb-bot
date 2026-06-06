@@ -1,6 +1,8 @@
 // ── Backend URL ───────────────────────────────────────────────────────────────
 // Cloud Run (asia-south1) backend serving the bot API + WebSocket.
 const BACKEND_URL = "https://nifty-bb-bot-950128522459.asia-south1.run.app";
+// sessionStorage: cleared on tab close, not accessible cross-origin, harder
+// to steal than localStorage via XSS that persists across sessions.
 const API_TOKEN_STORAGE_KEY = "nifty_bb_api_token";
 let apiTokenPrompted = false;
 
