@@ -13,7 +13,15 @@ from typing import Optional, Tuple
 
 import pandas as pd
 
-from config import CAPITAL_PER_TRADE, LOT_SIZE, MIN_DAYS_TO_EXPIRY, NFO_EXCHANGE, NIFTY_SYMBOL, SLIPPAGE_PCT
+from config import (
+    CAPITAL_PER_TRADE,
+    LOT_SIZE,
+    MAX_DAYS_TO_EXPIRY,
+    MIN_DAYS_TO_EXPIRY,
+    NFO_EXCHANGE,
+    NIFTY_SYMBOL,
+    SLIPPAGE_PCT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +107,11 @@ class OptionsSelector:
             df = self._get_instruments()
             today = date.today()
             future_expiries = sorted(df["expiry"].unique())
-            upcoming = [e for e in future_expiries if (e - today).days >= MIN_DAYS_TO_EXPIRY]
+            upcoming = [
+                e
+                for e in future_expiries
+                if MIN_DAYS_TO_EXPIRY <= (e - today).days <= MAX_DAYS_TO_EXPIRY
+            ]
             if upcoming:
                 expiry = upcoming[0]
                 days_left = (expiry - today).days
@@ -112,6 +124,10 @@ class OptionsSelector:
         fallback = _next_expiry_weekday(include_today=(MIN_DAYS_TO_EXPIRY <= 0))
         if (fallback - date.today()).days < MIN_DAYS_TO_EXPIRY:
             fallback = _next_expiry_weekday(fallback + timedelta(days=1))
+        if (fallback - date.today()).days > MAX_DAYS_TO_EXPIRY:
+            raise ValueError(
+                f"No NIFTY weekly expiry within {MIN_DAYS_TO_EXPIRY}-{MAX_DAYS_TO_EXPIRY} DTE"
+            )
         return fallback
 
     def get_atm_instrument(

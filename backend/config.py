@@ -66,6 +66,7 @@ ENTRY_START_MIN: int = 35   # earliest bar for new entries; allows warm-up + ski
 FORCE_EXIT_HOUR: int = 15
 FORCE_EXIT_MIN: int = 10
 MIN_DAYS_TO_EXPIRY: int = 0  # 0 = trade expiry-day (0 DTE) options; raise to 1+ to roll to next week
+MAX_DAYS_TO_EXPIRY: int = 7  # cap historical/live selection to current/next weekly options
 
 # ── Candle interval ───────────────────────────────────────────────────────────
 

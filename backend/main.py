@@ -152,15 +152,15 @@ async def process_candle(df: pd.DataFrame) -> None:
 
     _refresh_state(df_feat)
 
-    # ── Exit checks (position open) ───────────────────────────────────────────
-    if order_manager.has_open_position:
-        await _check_exit(df_feat)
-
     # ── Force exit at 15:10 ───────────────────────────────────────────────────
     if _is_force_exit_time() and order_manager.has_open_position:
         await _do_exit(df_feat, reason="FORCE_EXIT")
         _end_of_day_summary()
         return
+
+    # ── Exit checks (position open) ───────────────────────────────────────────
+    if order_manager.has_open_position:
+        await _check_exit(df_feat)
 
     # ── Entry pipeline ────────────────────────────────────────────────────────
     if order_manager.has_open_position:

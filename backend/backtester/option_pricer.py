@@ -20,7 +20,14 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from config import BROKERAGE_PER_ORDER, CAPITAL_PER_TRADE, LOT_SIZE, MIN_DAYS_TO_EXPIRY, SLIPPAGE_PCT
+from config import (
+    BROKERAGE_PER_ORDER,
+    CAPITAL_PER_TRADE,
+    LOT_SIZE,
+    MAX_DAYS_TO_EXPIRY,
+    MIN_DAYS_TO_EXPIRY,
+    SLIPPAGE_PCT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +38,10 @@ _BAR_TOLERANCE_MIN = 15     # a usable price must have an option bar within this
 # ── Expiry resolution ─────────────────────────────────────────────────────────
 
 def _nearest_expiry_on_or_after(entry_date: date, instruments_df: pd.DataFrame) -> Optional[date]:
-    """Earliest listed expiry with at least MIN_DAYS_TO_EXPIRY remaining from entry_date."""
+    """Earliest listed expiry inside the configured current/next-week DTE window."""
     candidates = sorted(
         d for d in instruments_df["expiry"].unique()
-        if (d - entry_date).days >= MIN_DAYS_TO_EXPIRY
+        if MIN_DAYS_TO_EXPIRY <= (d - entry_date).days <= MAX_DAYS_TO_EXPIRY
     )
     return candidates[0] if candidates else None
 
@@ -86,10 +93,12 @@ def enrich_with_real_option_prices(
     trades = trades_df.copy()
     trades["entry_time"] = pd.to_datetime(trades["entry_time"])
     trades["exit_time"]  = pd.to_datetime(trades["exit_time"])
+    for col in ("entry_price", "exit_price", "pnl"):
+        if col in trades.columns:
+            trades[col] = trades[col].astype(float)
 
     # ── Step 1: Resolve token + expiry for every trade ────────────────────────
-    tokens:   List[Optional[int]]  = []
-    symbols:  List[Optional[str]]  = []
+    candidate_lists: List[List[dict]] = []
     expiries: List[Optional[date]] = []
 
     for _, row in trades.iterrows():
@@ -98,41 +107,46 @@ def enrich_with_real_option_prices(
         entry_date = row["entry_time"].date()
 
         if atm_strike <= 0:
-            tokens.append(None); symbols.append(None); expiries.append(None)
+            candidate_lists.append([]); expiries.append(None)
             continue
 
         expiry = _nearest_expiry_on_or_after(entry_date, instruments_df)
         if expiry is None:
-            tokens.append(None); symbols.append(None); expiries.append(None)
+            candidate_lists.append([]); expiries.append(None)
             continue
 
-        mask = (
-            (instruments_df["strike"] == atm_strike)
-            & (instruments_df["instrument_type"] == direction)
-            & (instruments_df["expiry"] == expiry)
+        strike_mask = (
+            instruments_df["strike"] >= atm_strike
+            if direction == "CE"
+            else instruments_df["strike"] <= atm_strike
         )
-        matches = instruments_df[mask]
-        if matches.empty:
-            for delta in [50, -50, 100, -100]:   # nearest available strike
-                adj = atm_strike + delta
-                matches = instruments_df[
-                    (instruments_df["strike"] == adj)
-                    & (instruments_df["instrument_type"] == direction)
-                    & (instruments_df["expiry"] == expiry)
-                ]
-                if not matches.empty:
-                    break
+        mask = (
+            (instruments_df["instrument_type"] == direction)
+            & (instruments_df["expiry"] == expiry)
+            & strike_mask
+        )
+        matches = instruments_df[mask].copy()
 
         if matches.empty:
-            tokens.append(None); symbols.append(None); expiries.append(None)
-        else:
-            r = matches.iloc[0]
-            tokens.append(int(r["instrument_token"]))
-            symbols.append(str(r["tradingsymbol"]))
-            expiries.append(expiry)
+            candidate_lists.append([]); expiries.append(None)
+            continue
 
-    trades["_token"]        = tokens
-    trades["option_symbol"] = symbols
+        matches["distance"] = (matches["strike"] - atm_strike).abs()
+        matches = matches.sort_values(
+            ["distance", "strike"],
+            ascending=[True, direction == "CE"],
+        ).head(20)
+        candidate_lists.append([
+            {
+                "token": int(r["instrument_token"]),
+                "symbol": str(r["tradingsymbol"]),
+                "strike": int(r["strike"]),
+            }
+            for _, r in matches.iterrows()
+        ])
+        expiries.append(expiry)
+
+    trades["_candidates"]   = candidate_lists
     trades["expiry"]        = expiries
     trades["dte"] = [
         (e - t.date()).days if e is not None else None
@@ -140,12 +154,18 @@ def enrich_with_real_option_prices(
     ]
 
     # ── Step 2: Fetch historical data per unique token (one call each) ────────
-    unique_tokens = [int(t) for t in trades["_token"].dropna().unique()]
+    unique_tokens = sorted({
+        int(c["token"])
+        for candidates in trades["_candidates"]
+        for c in candidates
+    })
     logger.info(f'"Real option pricing: probing {len(unique_tokens)} unique instruments"')
 
     opt_cache: Dict[int, pd.DataFrame] = {}
     for token in unique_tokens:
-        token_rows = trades[trades["_token"] == token]
+        token_rows = trades[
+            trades["_candidates"].apply(lambda candidates: any(c["token"] == token for c in candidates))
+        ]
         from_dt = (token_rows["entry_time"].min() - pd.Timedelta(minutes=5)).to_pydatetime()
         to_dt   = (token_rows["exit_time"].max()  + pd.Timedelta(minutes=5)).to_pydatetime()
         try:
@@ -178,28 +198,54 @@ def enrich_with_real_option_prices(
         trades["exit_time"]  = trades["exit_time"].dt.tz_localize(None)
 
     for idx, row in trades.iterrows():
-        token = row.get("_token")
-        odf = opt_cache.get(int(token)) if token is not None and not pd.isna(token) else None
+        selected = None
+        for candidate in row["_candidates"]:
+            odf = opt_cache.get(int(candidate["token"]))
+            if odf is None:
+                continue
 
-        entry_ltp = _close_near(odf, row["entry_time"]) if odf is not None else None
-        exit_ltp  = _close_near(odf, row["exit_time"])  if odf is not None else None
+            entry_ltp = _close_near(odf, row["entry_time"])
+            exit_ltp  = _close_near(odf, row["exit_time"])
+            if not entry_ltp or not exit_ltp or entry_ltp <= 0 or exit_ltp <= 0:
+                continue
 
-        if not entry_ltp or not exit_ltp or entry_ltp <= 0 or exit_ltp <= 0:
+            actual_entry = round(entry_ltp * (1 + SLIPPAGE_PCT), 2)
+            one_lot_value = actual_entry * LOT_SIZE
+            if one_lot_value <= CAPITAL_PER_TRADE:
+                selected = (candidate, entry_ltp, exit_ltp, actual_entry, one_lot_value)
+                break
+
+        if selected is None:
+            logger.info(
+                f'"Dropping untradeable backtest row: no priced {row["direction"]} '
+                f'candidate under cap=₹{CAPITAL_PER_TRADE:.2f} '
+                f'for atm={row.get("atm_strike")} expiry={row.get("expiry")}"'
+            )
             real_entry_ltps.append(None)
             real_exit_ltps.append(None)
             continue
 
-        actual_entry = round(entry_ltp * (1 + SLIPPAGE_PCT), 2)
+        candidate, entry_ltp, exit_ltp, actual_entry, one_lot_value = selected
         actual_exit  = round(exit_ltp  * (1 - SLIPPAGE_PCT), 2)
         quantity     = int(CAPITAL_PER_TRADE / actual_entry / LOT_SIZE) * LOT_SIZE
         if quantity <= 0:
-            quantity = LOT_SIZE
+            real_entry_ltps.append(None)
+            real_exit_ltps.append(None)
+            continue
         pnl = round((actual_exit - actual_entry) * quantity - 2 * BROKERAGE_PER_ORDER, 2)
 
         trades.at[idx, "entry_price"] = actual_entry
         trades.at[idx, "exit_price"]  = actual_exit
         trades.at[idx, "pnl"]         = pnl
         trades.at[idx, "quantity"]    = quantity
+        trades.at[idx, "atm_strike"]  = candidate["strike"]
+        trades.at[idx, "option_symbol"] = candidate["symbol"]
+        trades.at[idx, "one_lot_value"] = round(one_lot_value, 2)
+        trades.at[idx, "exit_outcome"] = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "FLAT"
+        trades.at[idx, "exit_reason_is_profitable"] = bool(
+            (row["exit_reason"] != "TARGET" or pnl > 0)
+            and (row["exit_reason"] != "STOP_LOSS" or pnl < 0)
+        )
         real_entry_ltps.append(entry_ltp)
         real_exit_ltps.append(exit_ltp)
 
@@ -210,7 +256,7 @@ def enrich_with_real_option_prices(
     total  = len(trades)
     logger.info(f'"Real option pricing: {priced}/{total} trades priced from Kite data"')
 
-    trades = trades.drop(columns=["_token"], errors="ignore")
+    trades = trades.drop(columns=["_candidates"], errors="ignore")
 
     if drop_unpriced:
         trades = trades[trades["real_entry_ltp"].notna()].reset_index(drop=True)
