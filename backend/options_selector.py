@@ -25,10 +25,10 @@ def _round_to_strike(price: float, step: int = NIFTY_STRIKE_STEP) -> int:
     return round(price / step) * step
 
 
-def _next_thursday(from_date: Optional[date] = None) -> date:
-    """Return the nearest upcoming Thursday (NIFTY weekly expiry)."""
+def _next_expiry_weekday(from_date: Optional[date] = None) -> date:
+    """Return the nearest upcoming NIFTY weekly expiry (Tuesday)."""
     d = from_date or date.today()
-    days_ahead = 3 - d.weekday()   # Thursday is weekday 3
+    days_ahead = 1 - d.weekday()   # Tuesday is weekday 1
     if days_ahead <= 0:
         days_ahead += 7
     return d + timedelta(days=days_ahead)
@@ -85,7 +85,7 @@ class OptionsSelector:
     def get_weekly_expiry(self) -> date:
         """Return the nearest weekly expiry with at least MIN_DAYS_TO_EXPIRY remaining.
 
-        On expiry Thursday (0 DTE) this rolls forward to next week, avoiding
+        On expiry day (0 DTE Tuesday) this rolls forward to next week, avoiding
         near-zero-time-value options with extreme gamma and poor liquidity.
         """
         try:
@@ -100,10 +100,10 @@ class OptionsSelector:
                 return expiry
         except Exception as exc:
             logger.warning(f'"Could not fetch expiry from instruments: {exc} — estimating"')
-        # Fallback: next Thursday, skipping today if it is Thursday
-        fallback = _next_thursday()
+        # Fallback: next expiry weekday (Tuesday), skipping today if it is expiry day
+        fallback = _next_expiry_weekday()
         if (fallback - date.today()).days < MIN_DAYS_TO_EXPIRY:
-            fallback = _next_thursday(fallback + timedelta(days=1))
+            fallback = _next_expiry_weekday(fallback + timedelta(days=1))
         return fallback
 
     def get_atm_instrument(
