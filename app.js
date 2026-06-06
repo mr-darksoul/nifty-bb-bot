@@ -344,6 +344,16 @@ function renderBacktestResults(data) {
   el("bt-pnl").className = "value " + (parseFloat(m.total_pnl) >= 0 ? "pos" : "neg");
   el("bt-sharpe").className = "value " + (parseFloat(m.sharpe) >= 0 ? "pos" : "neg");
 
+  const modeEl = el("bt-price-mode");
+  if (modeEl && data.price_mode) {
+    const isReal = data.price_mode === "real_options";
+    const isMixed = data.price_mode.startsWith("mixed_");
+    modeEl.textContent = isReal ? "✓ Real option prices"
+                       : isMixed ? `⚠ ${data.price_mode.replace(/_/g," ")}`
+                       : "~ Delta proxy (0.45×spot)";
+    modeEl.style.color = isReal ? "var(--green)" : isMixed ? "var(--yellow)" : "var(--muted)";
+  }
+
   // Build equity curve from trades
   if (data.trades && data.trades.length > 0 && btEquitySeries) {
     let cumPnl = 0;
