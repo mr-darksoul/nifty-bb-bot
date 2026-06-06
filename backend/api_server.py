@@ -26,6 +26,7 @@ from config import (
     SIGNAL_FILTER_MODEL_PATH,
     TRADE_LOG_PATH,
     load_optimized_params,
+    save_params,
 )
 
 logger = logging.getLogger(__name__)
@@ -407,6 +408,36 @@ async def get_model_status() -> Dict:
             "meta": meta,
         },
     }
+
+
+@app.put("/params", dependencies=[Depends(require_api_token)])
+async def update_params(body: Dict) -> Dict:
+    """Update strategy parameters. Persists to optimized_params.json for live and backtest use."""
+    FLOAT_KEYS = {"bb_oversold", "bb_overbought", "bb_exit", "sl_buffer"}
+    INT_KEYS = {"rsi_min", "rsi_max"}
+    ALL_KEYS = FLOAT_KEYS | INT_KEYS
+
+    for k in ALL_KEYS:
+        if k not in body:
+            raise HTTPException(status_code=400, detail=f"Missing parameter: {k}")
+
+    try:
+        params: Dict = {k: float(body[k]) for k in FLOAT_KEYS}
+        params.update({k: int(body[k]) for k in INT_KEYS})
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid parameter value: {exc}")
+
+    if not (0 < params["bb_oversold"] < params["bb_overbought"] < 1):
+        raise HTTPException(status_code=400, detail="bb_oversold must be < bb_overbought and both in (0, 1)")
+    if not (0 < params["bb_exit"] < 1):
+        raise HTTPException(status_code=400, detail="bb_exit must be in (0, 1)")
+    if not (0 < params["sl_buffer"] < 1):
+        raise HTTPException(status_code=400, detail="sl_buffer must be in (0, 1)")
+    if not (0 <= params["rsi_min"] < params["rsi_max"] <= 100):
+        raise HTTPException(status_code=400, detail="rsi_min must be < rsi_max and both in [0, 100]")
+
+    save_params(params)
+    return {"status": "saved", "params": params}
 
 
 @app.post("/ws/ticket", dependencies=[Depends(require_api_token)])

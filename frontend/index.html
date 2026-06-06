@@ -181,13 +181,15 @@
         <div class="kv-row"><span class="k">Params Updated</span><span class="v" id="ms-params-date">—</span></div>
         <div class="kv-row"><span class="k">OOS Sharpe</span><span class="v" id="ms-sharpe">—</span></div>
         <div style="margin-top:10px;">
-          <div class="section-title" style="padding:0 0 4px;">Optimized Parameters</div>
-          <div class="kv-row"><span class="k">bb_oversold</span><span class="v" id="p-oversold">—</span></div>
-          <div class="kv-row"><span class="k">bb_overbought</span><span class="v" id="p-overbought">—</span></div>
-          <div class="kv-row"><span class="k">bb_exit</span><span class="v" id="p-exit">—</span></div>
-          <div class="kv-row"><span class="k">sl_buffer</span><span class="v" id="p-sl">—</span></div>
-          <div class="kv-row"><span class="k">rsi_min</span><span class="v" id="p-rsi-min">—</span></div>
-          <div class="kv-row"><span class="k">rsi_max</span><span class="v" id="p-rsi-max">—</span></div>
+          <div class="section-title" style="padding:0 0 4px;">Strategy Parameters</div>
+          <div class="kv-row"><span class="k">bb_oversold</span><input class="param-input" id="p-oversold" type="number" step="0.001" min="0.001" max="0.499" placeholder="0.050"></div>
+          <div class="kv-row"><span class="k">bb_overbought</span><input class="param-input" id="p-overbought" type="number" step="0.001" min="0.501" max="0.999" placeholder="0.950"></div>
+          <div class="kv-row"><span class="k">bb_exit</span><input class="param-input" id="p-exit" type="number" step="0.001" min="0.001" max="0.999" placeholder="0.500"></div>
+          <div class="kv-row"><span class="k">sl_buffer</span><input class="param-input" id="p-sl" type="number" step="0.001" min="0.001" max="0.999" placeholder="0.100"></div>
+          <div class="kv-row"><span class="k">rsi_min</span><input class="param-input" id="p-rsi-min" type="number" step="1" min="0" max="99" placeholder="35"></div>
+          <div class="kv-row"><span class="k">rsi_max</span><input class="param-input" id="p-rsi-max" type="number" step="1" min="1" max="100" placeholder="65"></div>
+          <button class="btn btn-blue btn-full" id="btn-save-params" style="margin-top:8px;">Save Parameters</button>
+          <div id="params-save-status" style="font-size:10px;color:var(--muted);padding-top:4px;text-align:center;"></div>
         </div>
       </div>
     </div>

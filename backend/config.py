@@ -115,6 +115,30 @@ _params_cache: Optional[dict] = None
 _params_cache_mtime: float = 0.0
 
 
+def save_params(params: dict) -> None:
+    """Write strategy parameters to optimized_params.json and reset the in-process cache."""
+    global _params_cache, _params_cache_mtime
+    import json as _json
+    from datetime import datetime as _dt
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    existing: dict = {}
+    if OPTIMIZED_PARAMS_PATH.exists():
+        try:
+            with open(OPTIMIZED_PARAMS_PATH) as f:
+                existing = _json.load(f)
+        except Exception:
+            pass
+    meta = existing.get("_meta", {})
+    meta["updated_manually"] = _dt.utcnow().isoformat() + "Z"
+    to_save = {k: v for k, v in params.items() if not k.startswith("_")}
+    to_save["_meta"] = meta
+    with open(OPTIMIZED_PARAMS_PATH, "w") as f:
+        _json.dump(to_save, f, indent=2)
+    _params_cache = None
+    _params_cache_mtime = 0.0
+    logger.info('"Saved user-defined strategy params to optimized_params.json"')
+
+
 def load_optimized_params() -> dict:
     """Load strategy parameters from optimizer output, falling back to defaults.
 
