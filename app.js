@@ -435,9 +435,13 @@ async function postJSON(path, body) {
 async function postJSON(path, body) {
   const resp = await fetch(BACKEND_URL + path, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body:    body ? JSON.stringify(body) : undefined,
   });
+  if (resp.status === 401 || resp.status === 503) {
+    localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    apiTokenPrompted = false;
+  }
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
