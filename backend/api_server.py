@@ -266,23 +266,49 @@ async def get_trade_history():
 
 @app.post("/backtest/run", dependencies=[Depends(require_api_token)])
 async def run_backtest_endpoint() -> Dict:
-    """Run backtester on the most recent cached data and return metrics."""
+    """Run backtester on 90 days of Kite historical candles (no local cache required)."""
     try:
         import pandas as pd
-        from config import DATA_CACHE_PATH
+        from datetime import timedelta
+        from auth import get_kite
+        from config import NIFTY_INDEX_TOKEN, BB_PERIOD, BB_STD, KITE_HISTORICAL_INTERVAL
         from indicators import compute_all
         from backtester.engine import run_backtest
-        from backtester.metrics import compute_metrics
 
-        if not DATA_CACHE_PATH.exists():
-            raise HTTPException(status_code=404, detail="No cached NIFTY data found")
+        try:
+            kite = get_kite()
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Kite not authenticated: {e}")
 
-        df = pd.read_csv(DATA_CACHE_PATH, index_col=0, parse_dates=True)
-        df = compute_all(df)
+        # Kite limits 1-min data to ~60 days per request; fetch two 45-day chunks.
+        to_dt = datetime.now()
+        mid_dt = to_dt - timedelta(days=45)
+        from_dt = to_dt - timedelta(days=90)
+        try:
+            chunk1 = kite.historical_data(
+                instrument_token=NIFTY_INDEX_TOKEN,
+                from_date=from_dt,
+                to_date=mid_dt,
+                interval=KITE_HISTORICAL_INTERVAL,
+            )
+            chunk2 = kite.historical_data(
+                instrument_token=NIFTY_INDEX_TOKEN,
+                from_date=mid_dt,
+                to_date=to_dt,
+                interval=KITE_HISTORICAL_INTERVAL,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"historical_data failed: {e}")
 
-        # Last 90 days
-        cutoff = df.index[-1] - pd.Timedelta(days=90)
-        df = df[df.index >= cutoff]
+        records = chunk1 + chunk2
+        if not records:
+            raise HTTPException(status_code=404, detail="No historical data returned from Kite")
+
+        df = pd.DataFrame(records)
+        df = df.drop_duplicates(subset=["date"]).sort_values("date")
+        df = df.set_index("date")
+        df.index = pd.to_datetime(df.index)
+        df = compute_all(df, bb_period=BB_PERIOD, bb_std=BB_STD)
 
         params = load_optimized_params()
         trades_df, daily_pnl, metrics = run_backtest(df, params=params)
@@ -290,6 +316,10 @@ async def run_backtest_endpoint() -> Dict:
         trades_list = []
         if not trades_df.empty:
             trades_list = trades_df.to_dict(orient="records")
+            for t in trades_list:
+                for k in ("entry_time", "exit_time"):
+                    if hasattr(t[k], "isoformat"):
+                        t[k] = t[k].isoformat()
 
         return {
             "metrics": metrics,
