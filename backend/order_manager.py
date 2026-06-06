@@ -123,6 +123,13 @@ class OrderManager:
             return None
 
         quantity = int(CAPITAL_PER_TRADE / entry_price / LOT_SIZE) * LOT_SIZE
+        if quantity <= 0:
+            logger.error(
+                f'"Cannot enter trade: computed quantity=0 for {symbol} '
+                f'entry_price={entry_price:.2f} CAPITAL_PER_TRADE={CAPITAL_PER_TRADE} LOT_SIZE={LOT_SIZE}"'
+            )
+            return None
+
         self._trade_counter += 1
         trade_id = f"T{datetime.now().strftime('%Y%m%d')}-{self._trade_counter:03d}"
 

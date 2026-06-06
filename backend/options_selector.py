@@ -190,11 +190,24 @@ class OptionsSelector:
         candidates["distance"] = (candidates["strike"] - atm_strike).abs()
         candidates = candidates.sort_values(["distance", "strike"], ascending=[True, option_type == "CE"])
 
-        for _, row in candidates.head(20).iterrows():
+        top = candidates.head(20)
+        quote_keys = [f"{NFO_EXCHANGE}:{row['tradingsymbol']}" for _, row in top.iterrows()]
+        try:
+            from auth import get_kite
+            batch_quotes = get_kite().ltp(quote_keys)
+        except Exception as exc:
+            logger.warning(f'"Batch LTP fetch failed: {exc} — falling back to per-symbol"')
+            batch_quotes = {}
+
+        for _, row in top.iterrows():
             symbol = str(row["tradingsymbol"])
             strike = int(row["strike"])
             token = int(row["instrument_token"])
-            ltp = self.get_ltp(token, symbol)
+            quote_key = f"{NFO_EXCHANGE}:{symbol}"
+            ltp_data = batch_quotes.get(quote_key, {})
+            ltp = float(ltp_data.get("last_price", 0)) if ltp_data else 0.0
+            if ltp <= 0:
+                ltp = self.get_ltp(token, symbol)  # per-symbol fallback
             if ltp <= 0:
                 continue
             if ltp <= max_ltp:
