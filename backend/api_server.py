@@ -314,35 +314,44 @@ async def run_backtest_endpoint() -> Dict:
 
         params = load_optimized_params()
         trades_df, daily_pnl, metrics = run_backtest(df, params=params)
-        price_mode = "delta_proxy"
 
-        # ── Enrich with real option prices from Kite ──────────────────────────
+        # ── Real Kite option prices only ──────────────────────────────────────
+        # Trades that cannot be priced from currently-listed contracts are
+        # dropped; the survivors define the real-data window.
+        from backtester.option_pricer import enrich_with_real_option_prices
+        from backtester.metrics import compute_metrics
+
+        candidate_trades = int(len(trades_df))
+        data_window: Dict[str, Optional[str]] = {"start": None, "end": None}
+
         if not trades_df.empty:
-            try:
-                from backtester.option_pricer import enrich_with_real_option_prices
-                from backtester.metrics import compute_metrics
+            nfo_raw = kite.instruments(exchange="NFO")
+            inst_df = pd.DataFrame(nfo_raw)
+            inst_df = inst_df[inst_df["name"] == "NIFTY"].copy()
+            inst_df["expiry"] = pd.to_datetime(inst_df["expiry"]).dt.date
 
-                nfo_raw = kite.instruments(exchange="NFO")
-                inst_df = pd.DataFrame(nfo_raw)
-                inst_df = inst_df[inst_df["name"] == "NIFTY"].copy()
-                inst_df["expiry"] = pd.to_datetime(inst_df["expiry"]).dt.date
+            trades_df = enrich_with_real_option_prices(
+                kite, trades_df, inst_df, drop_unpriced=True
+            )
 
-                trades_df = enrich_with_real_option_prices(kite, trades_df, inst_df)
-
-                # Recompute daily P&L and metrics from updated trade prices
+            if not trades_df.empty:
                 trades_df["date"] = trades_df["entry_time"].dt.date
                 daily_pnl = trades_df.groupby("date")["pnl"].sum()
                 daily_pnl.index = pd.to_datetime(daily_pnl.index)
                 metrics = compute_metrics(trades_df, daily_pnl)
+                data_window = {
+                    "start": trades_df["entry_time"].min().date().isoformat(),
+                    "end":   trades_df["exit_time"].max().date().isoformat(),
+                }
+            else:
+                # No trade fell inside the window where Kite has option data.
+                metrics = compute_metrics(trades_df, pd.Series(dtype=float))
 
-                enriched = int(trades_df["real_entry_ltp"].notna().sum())
-                price_mode = (
-                    "real_options"       if enriched == len(trades_df)
-                    else f"mixed_{enriched}_of_{len(trades_df)}_real"
-                )
-                logger.info(f'"Backtest price_mode={price_mode}"')
-            except Exception as exc:
-                logger.warning(f'"Option enrichment failed — using delta proxy: {exc}"', exc_info=True)
+        priced_trades = int(len(trades_df))
+        logger.info(
+            f'"Backtest real-only: {priced_trades}/{candidate_trades} trades priced, '
+            f'window={data_window}"'
+        )
 
         trades_list = []
         if not trades_df.empty:
@@ -351,7 +360,8 @@ async def run_backtest_endpoint() -> Dict:
                 for k in ("entry_time", "exit_time"):
                     if hasattr(t[k], "isoformat"):
                         t[k] = t[k].isoformat()
-                # Remove internal numpy/NaN values not JSON-serialisable
+                if hasattr(t.get("expiry"), "isoformat"):
+                    t["expiry"] = t["expiry"].isoformat()
                 for k in ("real_entry_ltp", "real_exit_ltp"):
                     v = t.get(k)
                     t[k] = None if v is None or (isinstance(v, float) and v != v) else round(float(v), 2)
@@ -359,7 +369,10 @@ async def run_backtest_endpoint() -> Dict:
         return {
             "metrics": metrics,
             "trades": trades_list,
-            "price_mode": price_mode,
+            "price_mode": "real_options",
+            "candidate_trades": candidate_trades,
+            "priced_trades": priced_trades,
+            "data_window": data_window,
             "params_used": {k: v for k, v in params.items() if not k.startswith("_")},
         }
     except HTTPException:
