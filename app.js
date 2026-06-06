@@ -188,6 +188,29 @@ function updateActiveTrade(trade, currentPrice) {
   el("at-score").textContent  = fmt(trade.signal_quality_score, 2);
 }
 
+// ── Strike Watch panel ────────────────────────────────────────────────────────
+
+function updateStrikeCandidates(candidates) {
+  const tbody = el("strike-candidates-tbody");
+  if (!tbody) return;
+  if (!candidates || !candidates.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="no-data">No entry attempted yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = candidates.map(c => {
+    const cls = c.status === "SELECTED"     ? "green"
+              : c.status === "CAP_EXCEEDED" ? "red"
+              : c.status === "NO_LTP"       ? "muted"
+              : "";
+    return `<tr${c.status === "SELECTED" ? ' style="background:rgba(63,185,80,0.08);"' : ""}>
+      <td class="text-mono">${c.strike}</td>
+      <td class="text-mono" style="font-size:10px;">${(c.symbol||"").substring(0,14)}</td>
+      <td>${c.ltp > 0 ? fmt(c.ltp, 2) : "—"}</td>
+      <td><span class="badge ${cls}" style="padding:1px 5px;font-size:9px;">${c.status}</span></td>
+    </tr>`;
+  }).join("");
+}
+
 // ── Today's trades table ──────────────────────────────────────────────────────
 
 function updateTradesTable(trades) {
@@ -195,7 +218,7 @@ function updateTradesTable(trades) {
   el("today-trade-count").textContent = trades.length + " trade" + (trades.length === 1 ? "" : "s");
 
   if (!trades.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="no-data">No trades today</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="no-data">No trades today</td></tr>';
     return;
   }
 
@@ -204,9 +227,11 @@ function updateTradesTable(trades) {
     const rowClass = pnl >= 0 ? "win" : "loss";
     const pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
     const entryTime = t.entry_time ? t.entry_time.split("T")[1]?.substring(0, 8) : "—";
+    const strike = t.strike || t.atm_strike || "—";
     return `<tr class="${rowClass}">
       <td>${entryTime}</td>
       <td><span class="badge ${t.direction==='CE'?'green':'red'}" style="padding:1px 6px;">${t.direction||"—"}</span></td>
+      <td class="text-mono">${strike}</td>
       <td class="text-mono" style="font-size:10px;">${(t.symbol||"—").substring(0,16)}</td>
       <td>${fmt(t.entry_price,2)}</td>
       <td>${fmt(t.exit_price,2)}</td>
@@ -340,6 +365,28 @@ function renderBacktestResults(data) {
 
     if (deduped.length > 0) btEquitySeries.setData(deduped);
   }
+
+  // Backtest trades table
+  const btTbody = el("bt-trades-tbody");
+  const btTable = el("bt-trades-table");
+  if (btTbody && data.trades && data.trades.length) {
+    btTable.style.display = "";
+    btTbody.innerHTML = data.trades.map(t => {
+      const pnl = parseFloat(t.pnl || 0);
+      const pnlClass = pnl >= 0 ? "pnl-pos" : "pnl-neg";
+      const entryTime = t.entry_time ? String(t.entry_time).split("T")[1]?.substring(0,5) : "—";
+      const strike = t.atm_strike || "—";
+      return `<tr class="${pnl >= 0 ? 'win' : 'loss'}">
+        <td>${entryTime}</td>
+        <td><span class="badge ${t.direction==='CE'?'green':'red'}" style="padding:1px 4px;font-size:9px;">${t.direction}</span></td>
+        <td class="text-mono">${strike}</td>
+        <td>${fmt(t.entry_price,2)}</td>
+        <td>${fmt(t.exit_price,2)}</td>
+        <td class="${pnlClass}">${fmtInr(pnl)}</td>
+        <td style="font-size:9px;">${t.exit_reason||"—"}</td>
+      </tr>`;
+    }).join("");
+  }
 }
 
 // ── Model status ──────────────────────────────────────────────────────────────
@@ -400,6 +447,7 @@ async function connectWS() {
       updateHeader(data);
       updateSignalPanel(data);
       updateActiveTrade(data.active_trade, data.price);
+      updateStrikeCandidates(data.strike_candidates);
 
       // If there's a live price, push a synthetic candle update
       if (data.price && candleSeries) {
@@ -469,8 +517,7 @@ async function pollStatus() {
     const s = await fetchJSON("/status");
     updateBotBadge(s.bot_running, s.market_open);
     updateControls(s);
-    // Show server-side DRY_RUN value as read-only (it is an env var, not
-    // togglable from the dashboard).
+    updateStrikeCandidates(s.strike_candidates);
     const dryEl = el("dry-run-status");
     if (dryEl) {
       dryEl.textContent = s.dry_run ? "ON" : "LIVE";

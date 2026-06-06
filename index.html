@@ -87,6 +87,24 @@
       </div>
     </div>
 
+    <!-- Strike Watch -->
+    <div class="card">
+      <div class="card-header">
+        <span>Strike Watch</span>
+        <span id="strike-expiry" class="text-muted" style="font-size:10px;">live</span>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <table class="trade-table" id="strike-candidates-table" style="font-size:11px;">
+          <thead>
+            <tr><th>Strike</th><th>Symbol</th><th>LTP ₹</th><th>Status</th></tr>
+          </thead>
+          <tbody id="strike-candidates-tbody">
+            <tr><td colspan="4" class="no-data">No entry attempted yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Bot Controls -->
     <div class="card">
       <div class="card-header">Bot Controls</div>
@@ -135,13 +153,13 @@
         <table class="trade-table">
           <thead>
             <tr>
-              <th>Time</th><th>Dir</th><th>Symbol</th>
+              <th>Time</th><th>Dir</th><th>Strike</th><th>Symbol</th>
               <th>Entry</th><th>Exit</th><th>P&amp;L</th>
               <th>Reason</th><th>Score</th>
             </tr>
           </thead>
           <tbody id="trades-tbody">
-            <tr><td colspan="8" class="no-data">No trades today</td></tr>
+            <tr><td colspan="9" class="no-data">No trades today</td></tr>
           </tbody>
         </table>
       </div>
@@ -195,6 +213,14 @@
         </div>
         <div id="backtest-equity-chart"></div>
         <div id="bt-status" class="text-muted" style="font-size:11px;padding-top:6px;"></div>
+        <div style="margin-top:8px;max-height:160px;overflow-y:auto;">
+          <table class="trade-table" id="bt-trades-table" style="font-size:10px;display:none;">
+            <thead>
+              <tr><th>Time</th><th>Dir</th><th>Strike</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th></tr>
+            </thead>
+            <tbody id="bt-trades-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
