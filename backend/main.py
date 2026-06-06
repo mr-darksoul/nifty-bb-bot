@@ -1,7 +1,7 @@
 """
 Entry point: wires all components together and starts the FastAPI server.
 
-On every 5-min candle close, executes the full signal pipeline:
+On every 1-min candle close, executes the full signal pipeline:
   1. Compute indicators
   2. Detect market regime
   3. Compute base %b signal
@@ -77,6 +77,7 @@ _bot_task: Optional[asyncio.Task] = None
 _stop_event = asyncio.Event()
 _candle_event = asyncio.Event()
 _latest_df: Optional[pd.DataFrame] = None
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -115,14 +116,13 @@ def _refresh_state(df: pd.DataFrame) -> None:
 # ── Candle close handler ──────────────────────────────────────────────────────
 
 def on_candle_close(df: pd.DataFrame) -> None:
-    """Called by DataFeed on every 5-min candle close. Runs in WebSocket thread."""
+    """Called by DataFeed on every 1-min candle close. Runs in WebSocket thread."""
     global _latest_df
     _latest_df = df
-    # Signal the async bot loop
-    try:
-        asyncio.get_event_loop().call_soon_threadsafe(_candle_event.set)
-    except Exception:
-        pass
+    if _event_loop is None:
+        logger.error('"Candle received before bot event loop was registered"')
+        return
+    _event_loop.call_soon_threadsafe(_candle_event.set)
 
 
 async def process_candle(df: pd.DataFrame) -> None:
@@ -198,8 +198,8 @@ async def process_candle(df: pd.DataFrame) -> None:
         feat_vec = get_signal_features_at_bar(df_feat, -1)
         score = signal_filter.score(feat_vec)
     except Exception as exc:
-        logger.warning(f'"Signal scoring failed: {exc} — using score=1.0"')
-        score = 1.0
+        logger.error(f'"Signal scoring failed: {exc} — rejecting signal"')
+        score = 0.0
 
     state.signal = direction
     state.signal_quality_score = score
@@ -346,10 +346,14 @@ async def _bot_loop() -> None:
     try:
         while not _stop_event.is_set():
             _candle_event.clear()
-            await asyncio.wait_for(
-                _candle_event.wait(),
-                timeout=CANDLE_INTERVAL_MINUTES * 60 + 30,
-            )
+            try:
+                await asyncio.wait_for(
+                    _candle_event.wait(),
+                    timeout=CANDLE_INTERVAL_MINUTES * 60 + 30,
+                )
+            except asyncio.TimeoutError:
+                logger.warning('"No completed candle received before timeout; continuing bot loop"')
+                continue
 
             if _stop_event.is_set():
                 break
@@ -369,7 +373,8 @@ async def _bot_loop() -> None:
 
 
 async def _start_bot() -> None:
-    global _bot_task, _stop_event
+    global _bot_task, _stop_event, _event_loop
+    _event_loop = asyncio.get_running_loop()
     _stop_event.clear()
     data_feed.start()
     _bot_task = asyncio.create_task(_bot_loop())

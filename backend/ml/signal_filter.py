@@ -95,7 +95,7 @@ class SignalFilter:
 
     def load(self, path: Path = SIGNAL_FILTER_MODEL_PATH) -> bool:
         if not path.exists():
-            logger.warning(f'"SignalFilter model not found at {path} — will pass all signals"')
+            logger.warning(f'"SignalFilter model not found at {path} — will reject live signals"')
             return False
         if not _XGB_AVAILABLE:
             logger.warning('"xgboost not installed — SignalFilter disabled"')
@@ -120,11 +120,11 @@ class SignalFilter:
 
         Returns:
             Predicted probability of HIGH_QUALITY (0.0–1.0).
-            Returns 1.0 (always pass) if model unavailable.
+            Returns 0.0 (reject) if model unavailable.
         """
         if not self._loaded or self.model is None:
-            logger.debug('"SignalFilter not loaded — returning default score 1.0"')
-            return 1.0
+            logger.warning('"SignalFilter not loaded — returning default score 0.0"')
+            return 0.0
 
         try:
             X = features[FEATURE_COLUMNS].values.reshape(1, -1).astype(np.float64)
@@ -134,8 +134,8 @@ class SignalFilter:
             )
             return proba
         except Exception as exc:
-            logger.error(f'"SignalFilter scoring failed: {exc} — returning 1.0"')
-            return 1.0
+            logger.error(f'"SignalFilter scoring failed: {exc} — returning 0.0"')
+            return 0.0
 
     def is_high_quality(self, features: pd.Series, threshold: float = SIGNAL_QUALITY_THRESHOLD) -> bool:
         """True if signal score meets the quality threshold."""

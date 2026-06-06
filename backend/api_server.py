@@ -4,17 +4,19 @@ backtest results, and bot control endpoints.
 """
 
 import asyncio
+import secrets
 import json
 import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 
 from config import (
+    API_AUTH_TOKEN,
     DRY_RUN,
     FRONTEND_ORIGIN,
     MODELS_DIR,
@@ -35,8 +37,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN, "http://localhost:3000", "http://localhost:5500", "*"],
-    allow_credentials=True,
+    allow_origins=[
+        FRONTEND_ORIGIN,
+        "http://localhost:3000",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500",
+        "null",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -80,6 +88,33 @@ def _model_mtime(path) -> str:
         return "N/A"
 
 
+def require_api_token(
+    authorization: Optional[str] = Header(default=None),
+    x_api_token: Optional[str] = Header(default=None),
+) -> None:
+    """Require the shared dashboard API token for REST endpoints."""
+    if not API_AUTH_TOKEN:
+        raise HTTPException(status_code=503, detail="API_AUTH_TOKEN is not configured")
+
+    token = x_api_token or ""
+    if not token and authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            token = value
+
+    if not secrets.compare_digest(token, API_AUTH_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid API token")
+
+
+async def _accept_authorized_ws(websocket: WebSocket, token: Optional[str]) -> bool:
+    """Validate WebSocket auth before accepting the connection."""
+    if not API_AUTH_TOKEN or not token or not secrets.compare_digest(token, API_AUTH_TOKEN):
+        await websocket.close(code=1008)
+        return False
+    await websocket.accept()
+    return True
+
+
 def _trade_to_dict(trade) -> Dict:
     from order_manager import Trade
     if isinstance(trade, Trade):
@@ -106,7 +141,7 @@ def _trade_to_dict(trade) -> Dict:
 
 # ── REST Endpoints ────────────────────────────────────────────────────────────
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(require_api_token)])
 async def get_status() -> Dict:
     """Overall bot health and state."""
     active = None
@@ -126,7 +161,7 @@ async def get_status() -> Dict:
     }
 
 
-@app.get("/indicators")
+@app.get("/indicators", dependencies=[Depends(require_api_token)])
 async def get_indicators() -> Dict:
     """Current indicator snapshot."""
     return {
@@ -142,7 +177,62 @@ async def get_indicators() -> Dict:
     }
 
 
-@app.get("/trades")
+@app.get("/candles", dependencies=[Depends(require_api_token)])
+async def get_candles(count: int = 375) -> Dict:
+    """
+    Recent historical 1-minute NIFTY candles with Bollinger Bands, so the
+    chart can render even when the market is closed / bot is stopped.
+    Requires a valid Kite session (historical data API).
+    """
+    from datetime import timedelta
+    import pandas as pd
+    from auth import get_kite
+    from config import NIFTY_INDEX_TOKEN, BB_PERIOD, BB_STD, KITE_HISTORICAL_INTERVAL
+    import indicators
+
+    try:
+        kite = get_kite()
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Kite not authenticated: {e}")
+
+    to_dt = datetime.now()
+    from_dt = to_dt - timedelta(days=8)
+    try:
+        records = kite.historical_data(
+            instrument_token=NIFTY_INDEX_TOKEN,
+            from_date=from_dt,
+            to_date=to_dt,
+            interval=KITE_HISTORICAL_INTERVAL,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"historical_data failed: {e}")
+
+    if not records:
+        return {"candles": [], "count": 0}
+
+    df = pd.DataFrame(records)
+    df = indicators.compute_all(df, bb_period=BB_PERIOD, bb_std=BB_STD)
+    df = df.tail(max(1, int(count)))
+
+    def _num(v):
+        return None if v is None or pd.isna(v) else round(float(v), 2)
+
+    candles = []
+    for _, row in df.iterrows():
+        candles.append({
+            "time": int(pd.Timestamp(row["date"]).timestamp()),
+            "open": _num(row["open"]),
+            "high": _num(row["high"]),
+            "low": _num(row["low"]),
+            "close": _num(row["close"]),
+            "bb_upper": _num(row.get("bb_upper")),
+            "bb_middle": _num(row.get("bb_middle")),
+            "bb_lower": _num(row.get("bb_lower")),
+        })
+    return {"candles": candles, "count": len(candles)}
+
+
+@app.get("/trades", dependencies=[Depends(require_api_token)])
 async def get_trades_today() -> List[Dict]:
     """Today's closed trades."""
     if state.order_manager is None:
@@ -150,7 +240,7 @@ async def get_trades_today() -> List[Dict]:
     return [_trade_to_dict(t) for t in state.order_manager.today_trades()]
 
 
-@app.get("/trades/history")
+@app.get("/trades/history", dependencies=[Depends(require_api_token)])
 async def get_trade_history():
     """Return the full trade log CSV."""
     if TRADE_LOG_PATH.exists():
@@ -162,7 +252,7 @@ async def get_trade_history():
     return JSONResponse(content=[], status_code=200)
 
 
-@app.get("/backtest/run")
+@app.get("/backtest/run", dependencies=[Depends(require_api_token)])
 async def run_backtest_endpoint() -> Dict:
     """Run backtester on the most recent cached data and return metrics."""
     try:
@@ -201,7 +291,7 @@ async def run_backtest_endpoint() -> Dict:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/model/status")
+@app.get("/model/status", dependencies=[Depends(require_api_token)])
 async def get_model_status() -> Dict:
     """Model file metadata and current optimized parameter values."""
     params = load_optimized_params()
@@ -228,7 +318,7 @@ async def get_model_status() -> Dict:
     }
 
 
-@app.post("/bot/start")
+@app.post("/bot/start", dependencies=[Depends(require_api_token)])
 async def start_bot() -> Dict:
     """Start the trading loop as a background asyncio task."""
     if state.bot_running:
@@ -243,7 +333,7 @@ async def start_bot() -> Dict:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/bot/stop")
+@app.post("/bot/stop", dependencies=[Depends(require_api_token)])
 async def stop_bot() -> Dict:
     """Stop the bot and force-exit any open position."""
     if not state.bot_running:
@@ -258,7 +348,7 @@ async def stop_bot() -> Dict:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/auth/login-url")
+@app.get("/auth/login-url", dependencies=[Depends(require_api_token)])
 async def get_login_url() -> Dict:
     """Return the Kite OAuth URL for the user to open in their browser."""
     try:
@@ -269,7 +359,7 @@ async def get_login_url() -> Dict:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/auth/login")
+@app.post("/auth/login", dependencies=[Depends(require_api_token)])
 async def auth_login(body: Dict) -> Dict:
     """
     Exchange a Kite request_token for an access_token.
@@ -289,13 +379,14 @@ async def auth_login(body: Dict) -> Dict:
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/live")
-async def ws_live(websocket: WebSocket) -> None:
+async def ws_live(websocket: WebSocket, token: Optional[str] = Query(default=None)) -> None:
     """
     Streams live indicator + regime + signal snapshot every 5 seconds.
     Payload: { price, percent_b, rsi, atr, regime, regime_name, signal,
                signal_quality, active_trade, daily_pnl }
     """
-    await websocket.accept()
+    if not await _accept_authorized_ws(websocket, token):
+        return
     _ws_clients.append(websocket)
     logger.info(f'"WebSocket client connected. Total clients: {len(_ws_clients)}"')
 

@@ -17,7 +17,7 @@ env/
 
 # ── Trade logs & data (regenerated at runtime / training) ─────────────
 backend/trades.csv
-backend/nifty_5min.csv
+backend/nifty_1min.csv
 
 # ── OS / editor ───────────────────────────────────────────────────────
 .DS_Store

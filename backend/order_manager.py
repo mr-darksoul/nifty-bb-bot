@@ -138,6 +138,9 @@ class OrderManager:
             )
         else:
             order_id = self._place_kite_order(symbol, quantity, "BUY")
+            if not order_id:
+                logger.error(f'"Entry rejected: broker BUY order failed for {symbol} qty={quantity}"')
+                return None
             trade.kite_entry_order_id = order_id or ""
 
         self._active_trade = trade
@@ -174,13 +177,6 @@ class OrderManager:
         exit_price = ltp * (1 - SLIPPAGE_PCT)
         pnl = (exit_price - trade.entry_price) * trade.quantity - 2 * BROKERAGE_PER_ORDER
 
-        trade.exit_time = datetime.now().isoformat()
-        trade.exit_price = round(exit_price, 2)
-        trade.exit_pb = round(percent_b, 4)
-        trade.exit_reason = reason
-        trade.pnl = round(pnl, 2)
-        trade.is_open = False
-
         if DRY_RUN:
             logger.info(
                 f'"[DRY RUN] SELL {trade.quantity} {trade.symbol} @ {exit_price:.2f} | '
@@ -188,7 +184,20 @@ class OrderManager:
             )
         else:
             order_id = self._place_kite_order(trade.symbol, trade.quantity, "SELL")
+            if not order_id:
+                logger.error(
+                    f'"Exit rejected: broker SELL order failed for {trade.symbol} '
+                    f'qty={trade.quantity}; keeping trade open"'
+                )
+                return None
             trade.kite_exit_order_id = order_id or ""
+
+        trade.exit_time = datetime.now().isoformat()
+        trade.exit_price = round(exit_price, 2)
+        trade.exit_pb = round(percent_b, 4)
+        trade.exit_reason = reason
+        trade.pnl = round(pnl, 2)
+        trade.is_open = False
 
         self._active_trade = None
         self._trade_history.append(trade)

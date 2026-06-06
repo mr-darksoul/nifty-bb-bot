@@ -38,6 +38,7 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 PORT: int = int(os.getenv("PORT", "8000"))
 FRONTEND_ORIGIN: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+API_AUTH_TOKEN: str = os.getenv("API_AUTH_TOKEN", "")
 
 # ── Trading mode ──────────────────────────────────────────────────────────────
 
@@ -64,7 +65,10 @@ FORCE_EXIT_MIN: int = 10
 
 # ── Candle interval ───────────────────────────────────────────────────────────
 
-CANDLE_INTERVAL_MINUTES: int = 5
+CANDLE_INTERVAL_MINUTES: int = 1
+# Kite Connect historical-data interval string for the above.
+# NOTE: Kite calls the 1-minute interval "minute" (not "1minute").
+KITE_HISTORICAL_INTERVAL: str = "minute"
 
 # ── Indicator defaults ────────────────────────────────────────────────────────
 
@@ -99,7 +103,7 @@ OPTIMIZED_PARAMS_PATH: Path = MODELS_DIR / "optimized_params.json"
 REGIME_MODEL_PATH: Path = MODELS_DIR / "regime_model.joblib"
 SIGNAL_FILTER_MODEL_PATH: Path = MODELS_DIR / "signal_filter_model.joblib"
 TRADE_LOG_PATH: Path = BASE_DIR / "trades.csv"
-DATA_CACHE_PATH: Path = BASE_DIR / "nifty_5min.csv"
+DATA_CACHE_PATH: Path = BASE_DIR / "nifty_1min.csv"
 
 
 def load_optimized_params() -> dict:

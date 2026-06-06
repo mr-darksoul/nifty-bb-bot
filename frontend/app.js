@@ -1,7 +1,8 @@
 // ── Backend URL ───────────────────────────────────────────────────────────────
-// Change this to your Railway deployment URL before going live.
-const BACKEND_URL = "http://localhost:8000";
-const WS_URL      = BACKEND_URL.replace(/^http/, "ws") + "/ws/live";
+// Cloud Run (asia-south1) backend serving the bot API + WebSocket.
+const BACKEND_URL = "https://nifty-bb-bot-950128522459.asia-south1.run.app";
+const API_TOKEN_STORAGE_KEY = "nifty_bb_api_token";
+let apiTokenPrompted = false;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws = null;
@@ -21,6 +22,27 @@ function fmt(n, d = 2)   { return n == null ? "—" : Number(n).toFixed(d); }
 function fmtPct(n)        { return n == null ? "—" : (Number(n) * 100).toFixed(1) + "%"; }
 function fmtInr(n)        { return n == null ? "—" : "₹" + Number(n).toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function el(id)           { return document.getElementById(id); }
+
+function getApiToken() {
+  let token = localStorage.getItem(API_TOKEN_STORAGE_KEY) || "";
+  if (!token && !apiTokenPrompted) {
+    apiTokenPrompted = true;
+    token = window.prompt("Enter dashboard API token") || "";
+    token = token.trim();
+    if (token) localStorage.setItem(API_TOKEN_STORAGE_KEY, token);
+  }
+  return token;
+}
+
+function authHeaders() {
+  const token = getApiToken();
+  return token ? { "X-API-Token": token } : {};
+}
+
+function wsUrl() {
+  const token = encodeURIComponent(getApiToken());
+  return BACKEND_URL.replace(/^http/, "ws") + "/ws/live?token=" + token;
+}
 
 function toast(msg, type = "info") {
   const c = el("toast-container");
@@ -349,7 +371,7 @@ function updateModelStatus(data) {
 function connectWS() {
   if (ws && ws.readyState <= 1) return;
 
-  ws = new WebSocket(WS_URL);
+  ws = new WebSocket(wsUrl());
 
   ws.onopen = () => {
     el("conn-dot").className   = "connected";
@@ -385,9 +407,46 @@ function connectWS() {
 // ── REST polling ──────────────────────────────────────────────────────────────
 
 async function fetchJSON(path) {
-  const resp = await fetch(BACKEND_URL + path);
+  const resp = await fetch(BACKEND_URL + path, { headers: authHeaders() });
+  if (resp.status === 401 || resp.status === 503) {
+    localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    apiTokenPrompted = false;
+  }
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
+}
+
+async function postJSON(path, body) {
+  const resp = await fetch(BACKEND_URL + path, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body:    body ? JSON.stringify(body) : undefined,
+  });
+  if (resp.status === 401 || resp.status === 503) {
+    localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    apiTokenPrompted = false;
+  }
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+async function loadCandles() {
+  if (!candleSeries) return;
+  try {
+    const d = await fetchJSON("/candles");
+    const candles = (d && d.candles) || [];
+    if (!candles.length) return;
+    candleSeries.setData(candles.map(c => ({
+      time: c.time, open: c.open, high: c.high, low: c.low, close: c.close,
+    })));
+    const bbU = candles.filter(c => c.bb_upper  != null).map(c => ({ time: c.time, value: c.bb_upper  }));
+    const bbM = candles.filter(c => c.bb_middle != null).map(c => ({ time: c.time, value: c.bb_middle }));
+    const bbL = candles.filter(c => c.bb_lower  != null).map(c => ({ time: c.time, value: c.bb_lower  }));
+    if (bbU.length) bbUpperSeries.setData(bbU);
+    if (bbM.length) bbMidSeries.setData(bbM);
+    if (bbL.length) bbLowSeries.setData(bbL);
+    tvChart.timeScale().fitContent();
+  } catch (e) { /* not authenticated yet, or market data unavailable */ }
 }
 
 async function pollStatus() {
@@ -416,14 +475,14 @@ async function loadModelStatus() {
 
 el("btn-start").addEventListener("click", async () => {
   try {
-    const r = await fetchJSON("/bot/start");
+    const r = await postJSON("/bot/start");
     toast("Bot started: " + (r.dry_run ? "DRY RUN" : "LIVE"), "ok");
   } catch (e) { toast("Failed to start bot: " + e.message, "error"); }
 });
 
 el("btn-stop").addEventListener("click", async () => {
   try {
-    await fetchJSON("/bot/stop");
+    await postJSON("/bot/stop");
     toast("Bot stopped", "ok");
   } catch (e) { toast("Failed to stop bot: " + e.message, "error"); }
 });
@@ -460,15 +519,20 @@ el("btn-submit-token").addEventListener("click", async () => {
   try {
     const resp = await fetch(BACKEND_URL + "/auth/login", {
       method:  "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body:    JSON.stringify({ request_token: token }),
     });
+    if (resp.status === 401 || resp.status === 503) {
+      localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+      apiTokenPrompted = false;
+    }
     if (!resp.ok) {
       const err = await resp.json();
       throw new Error(err.detail || resp.status);
     }
     toast("Kite authenticated successfully!", "ok");
     el("request-token-input").value = "";
+    loadCandles();
   } catch (e) { toast("Auth failed: " + e.message, "error"); }
 });
 
@@ -476,6 +540,7 @@ el("btn-submit-token").addEventListener("click", async () => {
 
 function bootstrap() {
   initChart();
+  loadCandles();
   connectWS();
   loadModelStatus();
   pollStatus();

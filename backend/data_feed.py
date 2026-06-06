@@ -1,8 +1,8 @@
 """
-WebSocket tick handler and 5-minute candle builder for NIFTY index.
+WebSocket tick handler and 1-minute candle builder for NIFTY index.
 
 Subscribes to Kite WebSocket ticks for NIFTY 50 and aggregates them
-into 5-minute OHLCV candles. Notifies registered callbacks on each close.
+into 1-minute OHLCV candles. Notifies registered callbacks on each close.
 """
 
 import asyncio

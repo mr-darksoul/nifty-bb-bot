@@ -5,7 +5,7 @@ Usage:
     python ml/train.py --months 9 --trials 200
 
 Steps:
-    1. Load or fetch NIFTY 5-min OHLCV data
+    1. Load or fetch NIFTY 1-min OHLCV data
     2. Compute all indicators + features
     3. Train HMM regime detector
     4. Label signals for signal filter training
@@ -32,9 +32,13 @@ from config import (
     DEFAULT_PARAMS,
     KITE_API_KEY,
     KITE_ACCESS_TOKEN,
+    KITE_HISTORICAL_INTERVAL,
     MODELS_DIR,
     load_optimized_params,
 )
+
+# 1-minute trading session: 09:15–15:30 = 375 bars/day
+BARS_PER_DAY = 375
 from indicators import compute_all
 from ml.feature_engineering import (
     FEATURE_COLUMNS,
@@ -61,7 +65,7 @@ logging.basicConfig(
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 def _fetch_from_kite(months: int) -> pd.DataFrame:
-    """Download historical NIFTY 5-min data from Kite Connect."""
+    """Download historical NIFTY 1-min data from Kite Connect."""
     try:
         from kiteconnect import KiteConnect
     except ImportError:
@@ -73,19 +77,32 @@ def _fetch_from_kite(months: int) -> pd.DataFrame:
     kite = KiteConnect(api_key=KITE_API_KEY)
     kite.set_access_token(KITE_ACCESS_TOKEN)
 
-    from_date = (datetime.now() - timedelta(days=months * 31)).strftime("%Y-%m-%d")
-    to_date = datetime.now().strftime("%Y-%m-%d")
-
-    logger.info(f"Fetching NIFTY 5-min data from {from_date} to {to_date}")
-
-    records = kite.historical_data(
-        instrument_token=256265,
-        from_date=from_date,
-        to_date=to_date,
-        interval="5minute",
+    start = datetime.now() - timedelta(days=months * 31)
+    end = datetime.now()
+    logger.info(
+        f"Fetching NIFTY 1-min data from {start:%Y-%m-%d} to {end:%Y-%m-%d} "
+        f"(in <=60-day chunks; Kite caps 1-min history per request)"
     )
 
+    # Kite limits the "minute" interval to a 60-day span per request.
+    CHUNK_DAYS = 60
+    records: list = []
+    chunk_start = start
+    while chunk_start < end:
+        chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), end)
+        chunk = kite.historical_data(
+            instrument_token=256265,
+            from_date=chunk_start.strftime("%Y-%m-%d"),
+            to_date=chunk_end.strftime("%Y-%m-%d"),
+            interval=KITE_HISTORICAL_INTERVAL,
+        )
+        records.extend(chunk)
+        logger.info(f"  fetched {len(chunk)} bars {chunk_start:%Y-%m-%d}→{chunk_end:%Y-%m-%d}")
+        chunk_start = chunk_end
+
     df = pd.DataFrame(records)
+    if not df.empty:
+        df = df.drop_duplicates(subset=["date"])
     df.rename(
         columns={"date": "datetime", "open": "open", "high": "high",
                  "low": "low", "close": "close", "volume": "volume"},
@@ -116,7 +133,7 @@ def _load_or_fetch(months: int) -> pd.DataFrame:
 def _generate_demo_data(months: int) -> pd.DataFrame:
     """Generate synthetic NIFTY-like data for offline testing when Kite unavailable."""
     logger.warning("Generating synthetic NIFTY data (Kite credentials not available)")
-    n_bars = months * 21 * 75   # ~75 5-min bars per trading day
+    n_bars = months * 21 * BARS_PER_DAY   # 375 1-min bars per trading day
     dates = pd.bdate_range(
         end=datetime.now(),
         periods=months * 21,
@@ -125,8 +142,8 @@ def _generate_demo_data(months: int) -> pd.DataFrame:
     all_bars = []
     price = 22000.0
     for d in dates:
-        for bar_num in range(75):
-            minutes_offset = 9 * 60 + 15 + bar_num * 5
+        for bar_num in range(BARS_PER_DAY):
+            minutes_offset = 9 * 60 + 15 + bar_num   # 1-min spacing
             ts = pd.Timestamp(d) + pd.Timedelta(minutes=minutes_offset)
             ret = np.random.normal(0, 0.0008)
             o = price
@@ -137,8 +154,9 @@ def _generate_demo_data(months: int) -> pd.DataFrame:
             all_bars.append({"open": o, "high": h, "low": l, "close": c, "volume": 0})
     df = pd.DataFrame(all_bars)
     df.index = pd.DatetimeIndex([
-        d + pd.Timedelta(minutes=9 * 60 + 15 + i * 5)
-        for i, d in enumerate(dates.repeat(75))
+        pd.Timestamp(day) + pd.Timedelta(minutes=9 * 60 + 15 + i)
+        for day in dates
+        for i in range(BARS_PER_DAY)
     ])
     return df
 
@@ -250,7 +268,7 @@ def main() -> None:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Load data
-    logger.info(f"Step 1: Loading {args.months} months of NIFTY 5-min data")
+    logger.info(f"Step 1: Loading {args.months} months of NIFTY 1-min data")
     if args.demo:
         df = _generate_demo_data(args.months)
     else:

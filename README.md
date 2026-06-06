@@ -244,6 +244,7 @@ KITE_ACCESS_TOKEN=      # Generated daily via OAuth flow
 TELEGRAM_BOT_TOKEN=     # From @BotFather on Telegram
 TELEGRAM_CHAT_ID=       # Your Telegram chat ID
 FRONTEND_ORIGIN=        # e.g. https://yourname.github.io
+API_AUTH_TOKEN=         # Long random token required by the dashboard/API
 PORT=8000               # Server port (Railway sets this automatically)
 DRY_RUN=true            # Set false only when ready for live trading
 LOG_LEVEL=INFO          # DEBUG / INFO / WARNING / ERROR
