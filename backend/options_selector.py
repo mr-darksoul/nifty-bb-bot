@@ -13,7 +13,7 @@ from typing import Optional, Tuple
 
 import pandas as pd
 
-from config import NFO_EXCHANGE, NIFTY_SYMBOL
+from config import CAPITAL_PER_TRADE, LOT_SIZE, NFO_EXCHANGE, NIFTY_SYMBOL, SLIPPAGE_PCT
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,59 @@ class OptionsSelector:
             symbol = f"NIFTY{suffix}{atm_strike}{option_type}"
             logger.info(f'"Fallback symbol: {symbol}"')
             return symbol, atm_strike, 0
+
+    def get_premium_capped_instrument(
+        self,
+        spot_price: float,
+        option_type: str,
+        expiry: Optional[date] = None,
+        max_trade_value: float = CAPITAL_PER_TRADE,
+    ) -> Tuple[str, int, int, float]:
+        """
+        Find the nearest OTM option whose one-lot premium fits the trade cap.
+
+        Returns:
+            (tradingsymbol, strike, instrument_token, ltp)
+        """
+        if option_type not in ("CE", "PE"):
+            raise ValueError(f"option_type must be CE or PE, got: {option_type}")
+
+        expiry = expiry or self.get_weekly_expiry()
+        atm_strike = _round_to_strike(spot_price)
+        max_ltp = max_trade_value / (LOT_SIZE * (1 + SLIPPAGE_PCT))
+        df = self._get_instruments()
+        strike_mask = df["strike"] >= atm_strike if option_type == "CE" else df["strike"] <= atm_strike
+
+        mask = (
+            (df["expiry"] == expiry)
+            & (df["instrument_type"] == option_type)
+            & strike_mask
+        )
+        candidates = df[mask].copy()
+        if candidates.empty:
+            raise ValueError(f"No {option_type} instruments found for expiry {expiry}")
+
+        candidates["distance"] = (candidates["strike"] - atm_strike).abs()
+        candidates = candidates.sort_values(["distance", "strike"], ascending=[True, option_type == "CE"])
+
+        for _, row in candidates.head(20).iterrows():
+            symbol = str(row["tradingsymbol"])
+            strike = int(row["strike"])
+            token = int(row["instrument_token"])
+            ltp = self.get_ltp(token, symbol)
+            if ltp <= 0:
+                continue
+            if ltp <= max_ltp:
+                logger.info(
+                    f'"Selected premium-capped option: {symbol} strike={strike} '
+                    f'ltp={ltp:.2f} max_ltp={max_ltp:.2f} cap={max_trade_value:.2f}"'
+                )
+                return symbol, strike, token, ltp
+
+        raise ValueError(
+            f"No {option_type} option under premium cap ₹{max_trade_value:.2f} "
+            f"for lot_size={LOT_SIZE}, max_ltp={max_ltp:.2f}"
+        )
 
     def get_ltp(self, instrument_token: int, tradingsymbol: str) -> float:
         """Fetch last traded price for an option symbol."""

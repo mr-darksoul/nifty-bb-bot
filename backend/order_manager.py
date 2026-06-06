@@ -114,7 +114,15 @@ class OrderManager:
             return None
 
         entry_price = ltp * (1 + SLIPPAGE_PCT)
-        quantity = max(LOT_SIZE, int(CAPITAL_PER_TRADE / entry_price / LOT_SIZE) * LOT_SIZE)
+        one_lot_value = entry_price * LOT_SIZE
+        if one_lot_value > CAPITAL_PER_TRADE:
+            logger.error(
+                f'"Cannot enter trade: one lot value ₹{one_lot_value:.2f} exceeds '
+                f'capital cap ₹{CAPITAL_PER_TRADE:.2f}"'
+            )
+            return None
+
+        quantity = int(CAPITAL_PER_TRADE / entry_price / LOT_SIZE) * LOT_SIZE
         self._trade_counter += 1
         trade_id = f"T{datetime.now().strftime('%Y%m%d')}-{self._trade_counter:03d}"
 

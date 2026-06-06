@@ -252,7 +252,7 @@ async def _do_entry(
     score: float,
     params: dict,
 ) -> None:
-    """Resolve ATM option, place entry order, send alert."""
+    """Resolve a premium-capped option, place entry order, send alert."""
     try:
         spot = state.nifty_price
         if spot <= 0:
@@ -260,11 +260,11 @@ async def _do_entry(
             return
 
         expiry = options_selector.get_weekly_expiry()
-        symbol, strike, token = options_selector.get_atm_instrument(spot, direction, expiry)
-        ltp = options_selector.get_ltp(token, symbol) if token else spot * 0.01
-
-        if ltp <= 0:
-            ltp = spot * 0.01   # fallback estimate
+        symbol, strike, token, ltp = options_selector.get_premium_capped_instrument(
+            spot_price=spot,
+            option_type=direction,
+            expiry=expiry,
+        )
 
         trade = order_manager.enter_trade(
             direction=direction,
