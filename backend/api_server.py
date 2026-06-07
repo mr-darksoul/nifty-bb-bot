@@ -347,8 +347,8 @@ async def run_backtest_endpoint() -> Dict:
         import pandas as pd
         from datetime import timedelta
         from auth import get_kite
-        from config import NIFTY_INDEX_TOKEN, BB_PERIOD, BB_STD, KITE_HISTORICAL_INTERVAL
-        from indicators import compute_all
+        from config import NIFTY_INDEX_TOKEN, BB_PERIOD, BB_STD, KITE_HISTORICAL_INTERVAL, STRATEGY_TIMEFRAME_MIN
+        from indicators import compute_all, resample_ohlc
         from backtester.engine import run_backtest
 
         try:
@@ -384,9 +384,17 @@ async def run_backtest_endpoint() -> Dict:
         df = df.drop_duplicates(subset=["date"]).sort_values("date")
         df = df.set_index("date")
         df.index = pd.to_datetime(df.index)
-        df = compute_all(df, bb_period=BB_PERIOD, bb_std=BB_STD)
 
         params = load_optimized_params()
+        # Resample the 1-min Kite candles to the STRATEGY timeframe (15-min for
+        # momentum_breakout) BEFORE computing indicators / signals, exactly like
+        # the live pipeline (main.process_candle) and finalize_params. Without
+        # this the backtest fires BB breakouts on 1-min noise — a different,
+        # higher-frequency strategy than the bot actually trades, producing
+        # ~16 trades/day instead of ~3-4/week and meaningless metrics.
+        tf = int(params.get("timeframe_min", STRATEGY_TIMEFRAME_MIN))
+        df = compute_all(resample_ohlc(df, tf), bb_period=BB_PERIOD, bb_std=BB_STD)
+
         trades_df, daily_pnl, metrics = run_backtest(df, params=params)
 
         # ── Real Kite option prices only ──────────────────────────────────────
