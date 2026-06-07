@@ -43,6 +43,8 @@ from config import (
     PORT,
     SIGNAL_QUALITY_THRESHOLD,
     TRENDING_DOWN_REGIME_ID,
+    USE_ML_FILTER,
+    USE_REGIME_FILTER,
     load_optimized_params,
     validate_secrets,
 )
@@ -178,29 +180,12 @@ async def process_candle(df: pd.DataFrame) -> None:
     if not _is_entry_allowed():
         return
 
-    # Step 2: Regime filter
-    try:
-        reg_feat = build_regime_features(df_ind).tail(60)
-        current_regime = regime_detector.predict_regime(reg_feat)
-        state.regime = current_regime
-        state.regime_name = REGIME_NAMES.get(current_regime, "UNKNOWN")
-    except Exception as exc:
-        logger.warning(f'"Regime detection failed: {exc} — blocking entry (TRENDING_DOWN)"')
-        current_regime = TRENDING_DOWN_REGIME_ID  # blocks entry; safe failure
-        state.regime = current_regime
-        state.regime_name = "UNKNOWN"
-
-    if current_regime != CHOPPY_REGIME_ID:
-        pb = float(df_feat.iloc[-1].get("percent_b", 0) or 0)
-        logger.info(f'"Signal skipped: regime={state.regime_name} pb={pb:.3f}"')
-        state.signal = "FILTERED_REGIME"
-        return
-
-    # Step 3: Base %b signal
+    # ── Base strategy spine (identical to the backtest engine) ────────────────
     last = df_feat.iloc[-1]
     pb = float(last.get("percent_b", 0.5) or 0.5)
     params = load_optimized_params()
 
+    # Step 2: BB %b extreme → direction
     direction = None
     if pb < params["bb_oversold"]:
         direction = "CE"
@@ -211,58 +196,85 @@ async def process_candle(df: pd.DataFrame) -> None:
         state.signal = "NONE"
         return
 
-    # RSI filter
+    # Step 3: Volatility gate — only trade when ATR is in the top percentile band,
+    # so the expected move can clear fixed per-trade costs.
+    min_atr_pct = float(params.get("min_atr_pct", 0.0))
+    atr_pct_val = float(last.get("atr_pct", 100.0) or 100.0)
+    if min_atr_pct > 0 and atr_pct_val < min_atr_pct:
+        logger.info(f'"Signal skipped: ATR pct={atr_pct_val:.1f} < {min_atr_pct:.1f}"')
+        state.signal = "FILTERED_ATR"
+        return
+
+    # Step 4: RSI band filter
     rsi_val = float(last.get("rsi", 50) or 50)
     if not (params["rsi_min"] <= rsi_val <= params["rsi_max"]):
         logger.info(f'"Signal skipped: RSI={rsi_val:.1f} outside [{params["rsi_min"]}, {params["rsi_max"]}]"')
         state.signal = "FILTERED_RSI"
         return
 
-    # Step 4: ML signal quality score
-    try:
-        feat_vec = get_signal_features_at_bar(df_feat, -1)
-        score = signal_filter.score(feat_vec)
-    except Exception as exc:
-        logger.error(f'"Signal scoring failed: {exc} — rejecting signal"')
-        score = 0.0
+    # ── Optional risk overlays (off by default for backtest/live coherence) ───
+    current_regime = CHOPPY_REGIME_ID   # neutral default when overlay disabled
+    if USE_REGIME_FILTER:
+        try:
+            reg_feat = build_regime_features(df_ind).tail(60)
+            current_regime = regime_detector.predict_regime(reg_feat)
+            state.regime = current_regime
+            state.regime_name = REGIME_NAMES.get(current_regime, "UNKNOWN")
+        except Exception as exc:
+            logger.warning(f'"Regime detection failed: {exc} — blocking entry (TRENDING_DOWN)"')
+            current_regime = TRENDING_DOWN_REGIME_ID  # blocks entry; safe failure
+            state.regime = current_regime
+            state.regime_name = "UNKNOWN"
+        if current_regime != CHOPPY_REGIME_ID:
+            logger.info(f'"Signal skipped: regime={state.regime_name} pb={pb:.3f}"')
+            state.signal = "FILTERED_REGIME"
+            return
+
+    score = 1.0
+    if USE_ML_FILTER:
+        try:
+            feat_vec = get_signal_features_at_bar(df_feat, -1)
+            score = signal_filter.score(feat_vec)
+        except Exception as exc:
+            logger.error(f'"Signal scoring failed: {exc} — rejecting signal"')
+            score = 0.0
+        if score < SIGNAL_QUALITY_THRESHOLD:
+            logger.info(f'"ML filter rejected: score={score:.3f} < {SIGNAL_QUALITY_THRESHOLD}"')
+            state.signal = "FILTERED_ML"
+            return
 
     state.signal = direction
     state.signal_quality_score = score
 
-    if score < SIGNAL_QUALITY_THRESHOLD:
-        logger.info(f'"ML filter rejected: score={score:.3f} < {SIGNAL_QUALITY_THRESHOLD}"')
-        return
-
-    # Steps 7–10: Select option, place order, alert
-    await _do_entry(direction, pb, current_regime, score, params)
+    # Select OTM option, place order, set price-anchored exit levels
+    await _do_entry(direction, pb, current_regime, score, params, df_feat)
 
 
 async def _check_exit(df_feat: pd.DataFrame) -> None:
-    """Evaluate exit conditions for the open position."""
+    """Evaluate exit conditions for the open position.
+
+    Exits are price-anchored on the NIFTY spot using target/stop levels locked in
+    at entry (ATR multiples) — identical to the backtest engine, so live and
+    simulated behaviour match.
+    """
     trade = order_manager.active_trade
     if trade is None:
         return
 
-    params = load_optimized_params()
-    last = df_feat.iloc[-1]
-    pb = float(last.get("percent_b", 0.5) or 0.5)
-    bb_exit = params["bb_exit"]
-    sl_buffer = params["sl_buffer"]
-
-    direction = trade.direction
-    entry_pb = trade.entry_pb
-    sl_pb = entry_pb - (sl_buffer if direction == "CE" else -sl_buffer)
+    spot = float(df_feat.iloc[-1].get("close", 0) or 0)
+    if spot <= 0:
+        return
 
     exit_reason = None
-    if direction == "CE":
-        if pb >= bb_exit:
+    if trade.direction == "CE":          # long delta: profit when spot rises
+        if trade.target_spot and spot >= trade.target_spot:
             exit_reason = "TARGET"
-        elif pb <= sl_pb:
+        elif trade.sl_spot and spot <= trade.sl_spot:
             exit_reason = "STOP_LOSS"
-    else:
-        if pb <= bb_exit:
+    else:                                # PE: profit when spot falls
+        if trade.target_spot and spot <= trade.target_spot:
             exit_reason = "TARGET"
-        elif pb >= sl_pb:
+        elif trade.sl_spot and spot >= trade.sl_spot:
             exit_reason = "STOP_LOSS"
 
     if exit_reason:
@@ -275,13 +287,23 @@ async def _do_entry(
     regime: int,
     score: float,
     params: dict,
+    df_feat: pd.DataFrame,
 ) -> None:
-    """Resolve a premium-capped option, place entry order, send alert."""
+    """Resolve a premium-capped OTM option, place entry order, lock exit levels."""
     try:
-        spot = state.nifty_price
+        last = df_feat.iloc[-1]
+        spot = float(last.get("close", 0) or 0) or state.nifty_price
         if spot <= 0:
             logger.error('"Cannot enter trade: spot price is zero"')
             return
+
+        # Price-anchored exit levels on the spot, using ATR multiples locked in
+        # at entry (bb_exit = target ATRs, sl_buffer = stop ATRs). Mirrors the
+        # backtest engine exactly.
+        atr_val = float(last.get("atr", 0) or 0)
+        sign = 1.0 if direction == "CE" else -1.0
+        target_spot = spot + sign * float(params["bb_exit"]) * atr_val
+        sl_spot = spot - sign * float(params["sl_buffer"]) * atr_val
 
         expiry = options_selector.get_weekly_expiry()
         symbol, strike, token, ltp = options_selector.get_premium_capped_instrument(
@@ -299,6 +321,9 @@ async def _do_entry(
             percent_b=pb,
             regime=regime,
             signal_quality_score=score,
+            entry_spot=spot,
+            target_spot=target_spot,
+            sl_spot=sl_spot,
         )
 
         if trade is None:

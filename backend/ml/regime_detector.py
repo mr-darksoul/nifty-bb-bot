@@ -15,6 +15,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from hmmlearn.hmm import GaussianHMM
+from sklearn.preprocessing import StandardScaler
 
 from config import CHOPPY_REGIME_ID, REGIME_MODEL_PATH
 
@@ -30,6 +31,7 @@ class RegimeDetector:
 
     def __init__(self) -> None:
         self.model: Optional[GaussianHMM] = None
+        self._scaler: Optional[StandardScaler] = None
         self._regime_map: dict = {}      # HMM state → canonical regime id
         self._loaded = False
 
@@ -43,20 +45,33 @@ class RegimeDetector:
             features: DataFrame with columns [log_return, rolling_vol, bb_width, atr_norm].
                       Must be clean (no NaN rows).
         """
-        X = features.dropna().values.astype(np.float64)
-        if len(X) < 200:
-            raise ValueError(f"Need at least 200 clean bars to train HMM, got {len(X)}")
+        clean = features.dropna()
+        X_raw = clean.values.astype(np.float64)
+        if len(X_raw) < 200:
+            raise ValueError(f"Need at least 200 clean bars to train HMM, got {len(X_raw)}")
 
-        model = GaussianHMM(
-            n_components=N_COMPONENTS,
-            covariance_type="full",
-            n_iter=200,
-            random_state=42,
-            verbose=False,
-        )
-        model.fit(X)
-        self.model = model
-        self._regime_map = self._assign_regime_labels(model, features.dropna())
+        # Normalise so all features are on the same scale; prevents ill-conditioned covars.
+        self._scaler = StandardScaler()
+        X = self._scaler.fit_transform(X_raw)
+
+        for cov_type in ("full", "diag"):
+            try:
+                model = GaussianHMM(
+                    n_components=N_COMPONENTS,
+                    covariance_type=cov_type,
+                    n_iter=200,
+                    random_state=42,
+                    verbose=False,
+                )
+                model.fit(X)
+                self.model = model
+                break
+            except Exception as exc:
+                logger.warning(f'"HMM covariance_type={cov_type} failed ({exc}), retrying with diag"')
+        else:
+            raise RuntimeError("HMM training failed for both full and diag covariance types")
+
+        self._regime_map = self._assign_regime_labels(model, clean)
         self._loaded = True
         logger.info(f'"HMM trained on {len(X)} bars. Regime map: {self._regime_map}"')
         return self
@@ -67,7 +82,8 @@ class RegimeDetector:
         of each state. Most negative → TRENDING_DOWN(0), most positive → TRENDING_UP(2),
         middle → CHOPPY(1).
         """
-        X = features.values.astype(np.float64)
+        X_raw = features.values.astype(np.float64)
+        X = self._scaler.transform(X_raw) if self._scaler is not None else X_raw
         states = model.predict(X)
         log_ret_col = features.columns.get_loc("log_return")
 
@@ -92,7 +108,7 @@ class RegimeDetector:
     def save(self, path: Path = REGIME_MODEL_PATH) -> None:
         """Persist model + regime map to disk."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({"model": self.model, "regime_map": self._regime_map}, path)
+        joblib.dump({"model": self.model, "scaler": self._scaler, "regime_map": self._regime_map}, path)
         logger.info(f'"Regime model saved to {path}"')
 
     def load(self, path: Path = REGIME_MODEL_PATH) -> bool:
@@ -103,6 +119,7 @@ class RegimeDetector:
         try:
             bundle = joblib.load(path)
             self.model = bundle["model"]
+            self._scaler = bundle.get("scaler")
             self._regime_map = bundle["regime_map"]
             self._loaded = True
             logger.info(f'"Regime model loaded from {path}"')
@@ -129,11 +146,12 @@ class RegimeDetector:
             logger.warning('"Regime model not loaded — defaulting to TRENDING_DOWN (entries blocked)"')
             return 0
 
-        X = feature_window.dropna().values.astype(np.float64)
-        if len(X) < 10:
-            logger.warning(f'"Too few clean bars ({len(X)}) for regime prediction — defaulting CHOPPY"')
+        X_raw = feature_window.dropna().values.astype(np.float64)
+        if len(X_raw) < 10:
+            logger.warning(f'"Too few clean bars ({len(X_raw)}) for regime prediction — defaulting CHOPPY"')
             return CHOPPY_REGIME_ID
 
+        X = self._scaler.transform(X_raw) if self._scaler is not None else X_raw
         try:
             raw_state = self.model.predict(X)[-1]
             regime = self._regime_map.get(int(raw_state), CHOPPY_REGIME_ID)

@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 PARAM_SPACE = {
     "bb_oversold":   (0.01, 0.15),
     "bb_overbought": (0.85, 0.99),
-    "bb_exit":       (0.40, 0.90),   # wider: let target ride more of the reversion
-    "sl_buffer":     (0.05, 0.20),
+    # bb_exit / sl_buffer are ATR multiples for price-anchored target / stop.
+    "bb_exit":       (0.5, 4.0),    # profit target: 0.5–4× ATR from entry
+    "sl_buffer":     (0.2, 2.0),    # stop loss:     0.2–2× ATR from entry
     "rsi_min":       (25, 45),
     "rsi_max":       (55, 75),
-    "min_atr_pct":   (40.0, 95.0),   # volatility floor: trade only big-enough moves
+    "min_atr_pct":   (40.0, 95.0),
 }
 
 MIN_TRADES_IN_SAMPLE = 30

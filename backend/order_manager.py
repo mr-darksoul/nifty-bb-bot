@@ -28,6 +28,7 @@ CSV_FIELDNAMES = [
     "trade_id", "entry_time", "exit_time", "direction", "symbol", "strike",
     "entry_price", "exit_price", "quantity", "pnl", "exit_reason",
     "signal_quality_score", "entry_pb", "exit_pb", "regime",
+    "entry_spot", "target_spot", "sl_spot",
 ]
 
 
@@ -49,6 +50,11 @@ class Trade:
     entry_pb: float = 0.0
     exit_pb: float = 0.0
     regime: int = -1
+    # Price-anchored exit levels on the NIFTY spot, locked in at entry (ATR
+    # multiples). The position is closed when spot crosses target_spot/sl_spot.
+    entry_spot: float = 0.0
+    target_spot: float = 0.0
+    sl_spot: float = 0.0
     kite_entry_order_id: str = ""
     kite_exit_order_id: str = ""
     is_open: bool = True
@@ -89,6 +95,9 @@ class OrderManager:
         percent_b: float,
         regime: int,
         signal_quality_score: float,
+        entry_spot: float = 0.0,
+        target_spot: float = 0.0,
+        sl_spot: float = 0.0,
     ) -> Optional[Trade]:
         """
         Place a market buy order for the option and record the trade.
@@ -144,6 +153,9 @@ class OrderManager:
             signal_quality_score=round(signal_quality_score, 4),
             entry_pb=round(percent_b, 4),
             regime=regime,
+            entry_spot=round(entry_spot, 2),
+            target_spot=round(target_spot, 2),
+            sl_spot=round(sl_spot, 2),
         )
 
         if DRY_RUN:
@@ -297,6 +309,9 @@ class OrderManager:
                             entry_pb=float(row.get("entry_pb", 0)),
                             exit_pb=float(row.get("exit_pb", 0)),
                             regime=int(row.get("regime", -1)),
+                            entry_spot=float(row.get("entry_spot", 0) or 0),
+                            target_spot=float(row.get("target_spot", 0) or 0),
+                            sl_spot=float(row.get("sl_spot", 0) or 0),
                             is_open=False,
                         )
                         self._trade_history.append(trade)

@@ -50,8 +50,11 @@ NSE_EXCHANGE: str = "NSE"
 LOT_SIZE: int = 65                       # NIFTY options lot size from NSE/FAOP/70616
 CAPITAL_PER_TRADE: float = 5_000.0       # ₹ maximum premium value per trade
 BROKERAGE_PER_ORDER: float = 20.0       # Zerodha flat ₹20
-SLIPPAGE_PCT: float = 0.0005            # 0.05% slippage each leg
-MAX_TRADES_PER_DAY: int = 2          # reduced from 3: fewer, higher-quality 1-min trades
+SLIPPAGE_PCT: float = 0.00003           # applied to underlying price; ~₹40 round-trip option impact
+# Per-day trade cap. Effectively unlimited by default — entries are throttled by
+# the BB %b extreme + RSI band + ATR-percentile volatility gate, not an arbitrary
+# count. Override with MAX_TRADES_PER_DAY env var to impose a hard ceiling.
+MAX_TRADES_PER_DAY: int = int(os.getenv("MAX_TRADES_PER_DAY", "50"))
 
 # ── Market session ────────────────────────────────────────────────────────────
 
@@ -85,16 +88,26 @@ EMA_SLOW: int = 21
 DEFAULT_PARAMS: dict = {
     "bb_oversold": 0.05,
     "bb_overbought": 0.95,
-    "bb_exit": 0.50,
-    "sl_buffer": 0.10,
+    # ATR multiples from entry spot price (price-anchored exits, not %b levels).
+    # bb_exit = profit target in ATR units; sl_buffer = stop loss in ATR units.
+    "bb_exit": 1.5,
+    "sl_buffer": 0.75,
     "rsi_min": 35,
     "rsi_max": 65,
     "min_atr_pct": 60.0,   # only trade when ATR is in top ~40% (move clears costs)
 }
 
-# ── ML thresholds ─────────────────────────────────────────────────────────────
+# ── ML overlay filters (opt-in) ──────────────────────────────────────────────
+# The optimizer tunes the BASE strategy (BB %b + RSI + ATR-percentile gate +
+# price-anchored ATR exits). The HMM regime classifier and XGBoost signal filter
+# are optional risk overlays that can only REDUCE trades, never add them. They
+# are OFF by default so live trading exactly reproduces the backtested strategy
+# (coherence). Enable them knowingly via env to add conservative gating.
 
-SIGNAL_QUALITY_THRESHOLD: float = 0.70   # raised from 0.60: stricter ML gate, fewer trades
+USE_REGIME_FILTER: bool = os.getenv("USE_REGIME_FILTER", "false").lower() in ("true", "1", "yes")
+USE_ML_FILTER: bool = os.getenv("USE_ML_FILTER", "false").lower() in ("true", "1", "yes")
+
+SIGNAL_QUALITY_THRESHOLD: float = float(os.getenv("SIGNAL_QUALITY_THRESHOLD", "0.55"))
 CHOPPY_REGIME_ID: int = 1               # HMM state that means CHOPPY
 TRENDING_DOWN_REGIME_ID: int = 0        # HMM state used as the safe fallback (blocks entry)
 

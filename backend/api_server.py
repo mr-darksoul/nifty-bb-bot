@@ -451,28 +451,36 @@ async def get_model_status() -> Dict:
 @app.put("/params", dependencies=[Depends(require_api_token)])
 async def update_params(body: Dict) -> Dict:
     """Update strategy parameters. Persists to optimized_params.json for live and backtest use."""
+    # bb_exit / sl_buffer are ATR multiples (profit target / stop in ATR units);
+    # min_atr_pct is the volatility-percentile gate. All optional except the core set.
     FLOAT_KEYS = {"bb_oversold", "bb_overbought", "bb_exit", "sl_buffer"}
     INT_KEYS = {"rsi_min", "rsi_max"}
-    ALL_KEYS = FLOAT_KEYS | INT_KEYS
+    OPTIONAL_FLOAT_KEYS = {"min_atr_pct"}
+    REQUIRED_KEYS = FLOAT_KEYS | INT_KEYS
 
-    for k in ALL_KEYS:
+    for k in REQUIRED_KEYS:
         if k not in body:
             raise HTTPException(status_code=400, detail=f"Missing parameter: {k}")
 
     try:
         params: Dict = {k: float(body[k]) for k in FLOAT_KEYS}
         params.update({k: int(body[k]) for k in INT_KEYS})
+        for k in OPTIONAL_FLOAT_KEYS:
+            if k in body:
+                params[k] = float(body[k])
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid parameter value: {exc}")
 
     if not (0 < params["bb_oversold"] < params["bb_overbought"] < 1):
         raise HTTPException(status_code=400, detail="bb_oversold must be < bb_overbought and both in (0, 1)")
-    if not (0 < params["bb_exit"] < 1):
-        raise HTTPException(status_code=400, detail="bb_exit must be in (0, 1)")
-    if not (0 < params["sl_buffer"] < 1):
-        raise HTTPException(status_code=400, detail="sl_buffer must be in (0, 1)")
+    if not (0 < params["bb_exit"] <= 10):
+        raise HTTPException(status_code=400, detail="bb_exit (ATR multiple) must be in (0, 10]")
+    if not (0 < params["sl_buffer"] <= 10):
+        raise HTTPException(status_code=400, detail="sl_buffer (ATR multiple) must be in (0, 10]")
     if not (0 <= params["rsi_min"] < params["rsi_max"] <= 100):
         raise HTTPException(status_code=400, detail="rsi_min must be < rsi_max and both in [0, 100]")
+    if "min_atr_pct" in params and not (0 <= params["min_atr_pct"] <= 100):
+        raise HTTPException(status_code=400, detail="min_atr_pct must be in [0, 100]")
 
     save_params(params)
     return {"status": "saved", "params": params}

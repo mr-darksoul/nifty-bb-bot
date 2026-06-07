@@ -84,9 +84,9 @@ def run_backtest(
     in_trade = False
     entry_iloc = -1
     entry_direction = 0   # +1 = CE, -1 = PE
-    entry_pb = 0.0
     entry_price = 0.0
-    sl_pb = 0.0
+    target_price = 0.0   # price-based target (ATR multiple from entry spot)
+    sl_price = 0.0       # price-based stop (ATR multiple from entry spot)
     entry_time = None
     trades_today = 0
     current_date = None
@@ -121,33 +121,36 @@ def run_backtest(
         if pd.isna(pb_val):
             continue
 
-        # ── Exit checks (if in trade) ──────────────────────────────────────────
+        # ── Exit checks (if in trade) — price-anchored targets/stops ──────────
+        # bb_exit and sl_buffer are ATR multiples from the entry spot price.
+        # This decouples P&L from BB drift so the R:R is locked in at entry.
         if in_trade:
             exit_triggered = False
             reason = ""
+            cur_price = close.iloc[i]
 
-            if entry_direction == 1:     # CE: exit when pb crosses up to bb_exit
-                if pb_val >= bb_exit:
+            if entry_direction == 1:     # CE: profit when price rises
+                if cur_price >= target_price:
                     reason = EXIT_REASON_TARGET
                     exit_triggered = True
-                elif pb_val <= sl_pb:
+                elif cur_price <= sl_price:
                     reason = EXIT_REASON_SL
                     exit_triggered = True
-            else:                        # PE: exit when pb crosses down to bb_exit
-                if pb_val <= bb_exit:
+            else:                        # PE: profit when price falls
+                if cur_price <= target_price:
                     reason = EXIT_REASON_TARGET
                     exit_triggered = True
-                elif pb_val >= sl_pb:
+                elif cur_price >= sl_price:
                     reason = EXIT_REASON_SL
                     exit_triggered = True
 
             if exit_triggered:
                 pnl = _calc_pnl(
-                    entry_direction, entry_price, close.iloc[i],
+                    entry_direction, entry_price, cur_price,
                     atr_series.iloc[i], entry_iloc, i
                 )
                 trades.append(_make_trade(
-                    entry_time, ts, entry_direction, entry_price, close.iloc[i],
+                    entry_time, ts, entry_direction, entry_price, cur_price,
                     pnl, reason, i - entry_iloc,
                     int(round(entry_spot / 50) * 50),
                 ))
@@ -181,11 +184,15 @@ def run_backtest(
                 in_trade = True
                 entry_iloc = i
                 entry_direction = direction
-                entry_pb = pb_val
-                entry_price = close.iloc[i] * (1 + direction * SLIPPAGE_PCT)  # slippage on entry
-                entry_time = ts
                 entry_spot = close.iloc[i]
-                sl_pb = entry_pb - direction * sl_buffer
+                entry_price = entry_spot * (1 + direction * SLIPPAGE_PCT)
+                entry_time = ts
+                entry_atr = atr_series.iloc[i]
+                # Lock in price-based target and stop at entry using ATR multiples.
+                # bb_exit  = ATR multiples for the profit target
+                # sl_buffer = ATR multiples for the stop loss
+                target_price = entry_spot + direction * bb_exit * entry_atr
+                sl_price     = entry_spot - direction * sl_buffer * entry_atr
                 trades_today += 1
 
     # ── Close any open trade at end of data ────────────────────────────────────

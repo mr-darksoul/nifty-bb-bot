@@ -119,60 +119,62 @@ def label_signals(
     """
     Generate binary labels for signal quality training.
 
-    A signal bar is labelled 1 if the subsequent trade would reach bb_exit
-    target before hitting the SL level, 0 otherwise.
+    A signal bar is labelled 1 if the subsequent trade would reach its
+    price-anchored profit target before hitting the stop loss, 0 otherwise.
+    Target/stop are ATR multiples from the entry spot, identical to the
+    backtest engine and the live exit logic (so labels match what is traded).
 
     Args:
-        df:          Feature DataFrame (must contain percent_b).
+        df:          Feature DataFrame (must contain close, atr).
         entry_mask:  Boolean Series, True at signal bars.
         direction:   Series of +1 (CE/long) or -1 (PE/short) at signal bars.
-        bb_exit:     %b exit target (e.g. 0.50).
-        sl_buffer:   Offset beyond entry %b that constitutes stop-loss.
+        bb_exit:     Profit target in ATR multiples.
+        sl_buffer:   Stop loss in ATR multiples.
 
     Returns:
         labels: Series aligned to df.index, NaN except at entry bars (0 or 1).
     """
     labels = pd.Series(np.nan, index=df.index, dtype=float)
     entry_indices = df.index[entry_mask]
+    close = df["close"]
+    atr = df["atr"]
 
     for entry_ts in entry_indices:
         iloc = df.index.get_loc(entry_ts)
-        entry_pb = df.loc[entry_ts, "percent_b"]
+        entry_price = close.loc[entry_ts]
+        entry_atr = atr.loc[entry_ts]
         dir_val = direction.loc[entry_ts]
 
-        if pd.isna(entry_pb):
+        if pd.isna(entry_price) or pd.isna(entry_atr) or entry_atr <= 0:
             continue
 
-        if dir_val == 1:                     # CE: bought when oversold
-            sl_pb = entry_pb - sl_buffer
-            target_pb = bb_exit
-        else:                                # PE: bought when overbought
-            sl_pb = entry_pb + sl_buffer
-            target_pb = bb_exit
+        sign = 1.0 if dir_val == 1 else -1.0
+        target_price = entry_price + sign * bb_exit * entry_atr
+        sl_price = entry_price - sign * sl_buffer * entry_atr
 
         label = 0
-        for future_iloc in range(iloc + 1, min(iloc + 79, len(df))):  # max ~6.5h
-            future_pb = df.iloc[future_iloc]["percent_b"]
-            if pd.isna(future_pb):
-                continue
-
+        for future_iloc in range(iloc + 1, min(iloc + 240, len(df))):  # intraday horizon
             hour = df.index[future_iloc].hour
             minute = df.index[future_iloc].minute
             if (hour == 15 and minute >= 10) or hour > 15:
-                break                        # force exit, call it SL
+                break                        # force exit before target → not a win
 
-            if dir_val == 1:
-                if future_pb >= target_pb:
+            price = close.iloc[future_iloc]
+            if pd.isna(price):
+                continue
+
+            if dir_val == 1:                 # CE
+                if price >= target_price:
                     label = 1
                     break
-                if future_pb <= sl_pb:
+                if price <= sl_price:
                     label = 0
                     break
-            else:
-                if future_pb <= target_pb:
+            else:                            # PE
+                if price <= target_price:
                     label = 1
                     break
-                if future_pb >= sl_pb:
+                if price >= sl_price:
                     label = 0
                     break
 

@@ -1,0 +1,88 @@
+{
+  "bb_oversold": 0.07703587394484371,
+  "bb_overbought": 0.9353129196153563,
+  "bb_exit": 2.446385261868961,
+  "sl_buffer": 1.9348548130346657,
+  "rsi_min": 36,
+  "rsi_max": 72,
+  "min_atr_pct": 50.42148610203735,
+  "_meta": {
+    "n_trials": 400,
+    "best_oos_sharpe": 2.5026358106100615,
+    "walk_forward_summary": {
+      "n_windows": 5,
+      "avg_oos_sharpe": 2.5026358106100615,
+      "median_oos_sharpe": -0.7973624089604957,
+      "avg_oos_win_rate": 0.4985673993736741,
+      "total_oos_pnl": 70405.71999999997,
+      "pct_profitable_windows": 0.4,
+      "windows": [
+        {
+          "window": 1,
+          "in_sample_start": "2025-09-16",
+          "in_sample_end": "2025-12-15",
+          "out_sample_start": "2025-12-15",
+          "out_sample_end": "2026-01-14",
+          "in_sharpe": -1.5236348815470555,
+          "out_sharpe": -2.0502252176476508,
+          "out_win_rate": 0.45248868778280543,
+          "out_total_pnl": -14141.79,
+          "out_trades": 221,
+          "out_max_dd": -29688.43
+        },
+        {
+          "window": 2,
+          "in_sample_start": "2025-10-16",
+          "in_sample_end": "2026-01-14",
+          "out_sample_start": "2026-01-14",
+          "out_sample_end": "2026-02-13",
+          "in_sharpe": -1.0769460188884743,
+          "out_sharpe": -0.7973624089604957,
+          "out_win_rate": 0.46511627906976744,
+          "out_total_pnl": -5866.169999999999,
+          "out_trades": 215,
+          "out_max_dd": -30534.63
+        },
+        {
+          "window": 3,
+          "in_sample_start": "2025-11-15",
+          "in_sample_end": "2026-02-13",
+          "out_sample_start": "2026-02-13",
+          "out_sample_end": "2026-03-15",
+          "in_sharpe": -1.1435189515986373,
+          "out_sharpe": 12.196835655441195,
+          "out_win_rate": 0.5666666666666667,
+          "out_total_pnl": 60518.44999999998,
+          "out_trades": 210,
+          "out_max_dd": -5322.760000000009
+        },
+        {
+          "window": 4,
+          "in_sample_start": "2025-12-15",
+          "in_sample_end": "2026-03-15",
+          "out_sample_start": "2026-03-15",
+          "out_sample_end": "2026-04-14",
+          "in_sharpe": 2.0076012617095143,
+          "out_sharpe": -1.4082581464886756,
+          "out_win_rate": 0.4635416666666667,
+          "out_total_pnl": -11047.979999999996,
+          "out_trades": 192,
+          "out_max_dd": -27101.53
+        },
+        {
+          "window": 5,
+          "in_sample_start": "2026-01-14",
+          "in_sample_end": "2026-04-14",
+          "out_sample_start": "2026-04-14",
+          "out_sample_end": "2026-05-14",
+          "in_sharpe": 2.064029377235548,
+          "out_sharpe": 4.572189170705934,
+          "out_win_rate": 0.5450236966824644,
+          "out_total_pnl": 40943.20999999999,
+          "out_trades": 211,
+          "out_max_dd": -25509.000000000004
+        }
+      ]
+    }
+  }
+}
