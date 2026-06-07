@@ -6,6 +6,7 @@ Raises ValueError on startup if required secrets are missing.
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -29,11 +30,6 @@ logger = logging.getLogger(__name__)
 KITE_API_KEY: str = os.getenv("KITE_API_KEY", "")
 KITE_API_SECRET: str = os.getenv("KITE_API_SECRET", "")
 KITE_ACCESS_TOKEN: str = os.getenv("KITE_ACCESS_TOKEN", "")
-
-# ── Telegram ──────────────────────────────────────────────────────────────────
-
-TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ── Server ────────────────────────────────────────────────────────────────────
 
@@ -100,6 +96,7 @@ DEFAULT_PARAMS: dict = {
 
 SIGNAL_QUALITY_THRESHOLD: float = 0.70   # raised from 0.60: stricter ML gate, fewer trades
 CHOPPY_REGIME_ID: int = 1               # HMM state that means CHOPPY
+TRENDING_DOWN_REGIME_ID: int = 0        # HMM state used as the safe fallback (blocks entry)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -114,6 +111,9 @@ DATA_CACHE_PATH: Path = BASE_DIR / "nifty_1min.csv"
 
 _params_cache: Optional[dict] = None
 _params_cache_mtime: float = 0.0
+# Guards the cache against concurrent access: load_optimized_params runs on the
+# candle pipeline while save_params runs from the /params REST endpoint.
+_params_lock = threading.Lock()
 
 
 def save_params(params: dict) -> None:
@@ -133,10 +133,11 @@ def save_params(params: dict) -> None:
     meta["updated_manually"] = _dt.utcnow().isoformat() + "Z"
     to_save = {k: v for k, v in params.items() if not k.startswith("_")}
     to_save["_meta"] = meta
-    with open(OPTIMIZED_PARAMS_PATH, "w") as f:
-        _json.dump(to_save, f, indent=2)
-    _params_cache = None
-    _params_cache_mtime = 0.0
+    with _params_lock:
+        with open(OPTIMIZED_PARAMS_PATH, "w") as f:
+            _json.dump(to_save, f, indent=2)
+        _params_cache = None
+        _params_cache_mtime = 0.0
     logger.info('"Saved user-defined strategy params to optimized_params.json"')
 
 
@@ -150,12 +151,13 @@ def load_optimized_params() -> dict:
     if OPTIMIZED_PARAMS_PATH.exists():
         try:
             mtime = OPTIMIZED_PARAMS_PATH.stat().st_mtime
-            if _params_cache is not None and mtime == _params_cache_mtime:
-                return _params_cache.copy()
-            with open(OPTIMIZED_PARAMS_PATH) as f:
-                params = json.load(f)
-            _params_cache = params
-            _params_cache_mtime = mtime
+            with _params_lock:
+                if _params_cache is not None and mtime == _params_cache_mtime:
+                    return _params_cache.copy()
+                with open(OPTIMIZED_PARAMS_PATH) as f:
+                    params = json.load(f)
+                _params_cache = params
+                _params_cache_mtime = mtime
             logger.info('"Loaded optimized params from file"')
             return params.copy()
         except Exception as exc:

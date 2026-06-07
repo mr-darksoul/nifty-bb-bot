@@ -158,8 +158,12 @@ class OptionsSelector:
             matches = df[mask]
 
             if matches.empty:
-                # Try adjacent strikes
-                for delta in [NIFTY_STRIKE_STEP, -NIFTY_STRIKE_STEP, 2 * NIFTY_STRIKE_STEP]:
+                # Try adjacent strikes, expanding symmetrically outward so an
+                # ATM strike at either edge of the listed chain still resolves.
+                for delta in [
+                    NIFTY_STRIKE_STEP, -NIFTY_STRIKE_STEP,
+                    2 * NIFTY_STRIKE_STEP, -2 * NIFTY_STRIKE_STEP,
+                ]:
                     alt_strike = atm_strike + delta
                     mask = (
                         (df["expiry"] == expiry)
@@ -237,6 +241,11 @@ class OptionsSelector:
 
         self.last_candidates = []
         selected: Optional[tuple] = None
+        # Cap per-symbol fallback fetches: if the batch quote is missing we hit
+        # the single-symbol LTP API, but a total batch failure must not trigger
+        # 20 sequential blocking calls on the (async) entry path.
+        MAX_LTP_FALLBACKS = 5
+        fallbacks_used = 0
 
         for _, row in top.iterrows():
             symbol = str(row["tradingsymbol"])
@@ -245,8 +254,9 @@ class OptionsSelector:
             quote_key = f"{NFO_EXCHANGE}:{symbol}"
             ltp_data = batch_quotes.get(quote_key, {})
             ltp = float(ltp_data.get("last_price", 0)) if ltp_data else 0.0
-            if ltp <= 0:
+            if ltp <= 0 and fallbacks_used < MAX_LTP_FALLBACKS:
                 ltp = self.get_ltp(token, symbol)  # per-symbol fallback
+                fallbacks_used += 1
 
             if ltp <= 0:
                 status = "NO_LTP"

@@ -9,8 +9,9 @@ import json
 import logging
 import os
 import time as _time
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,10 +32,38 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+# Lifespan hooks populated by main.py before the server starts. Using the
+# lifespan context manager instead of the deprecated @app.on_event handlers.
+_startup_hooks: List[Callable[[], Awaitable[None]]] = []
+_shutdown_hooks: List[Callable[[], Awaitable[None]]] = []
+
+
+def on_startup(fn: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[None]]:
+    """Register an async startup hook (runs once when the server boots)."""
+    _startup_hooks.append(fn)
+    return fn
+
+
+def on_shutdown(fn: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[None]]:
+    """Register an async shutdown hook (runs once when the server stops)."""
+    _shutdown_hooks.append(fn)
+    return fn
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    for hook in _startup_hooks:
+        await hook()
+    yield
+    for hook in _shutdown_hooks:
+        await hook()
+
+
 app = FastAPI(
     title="NIFTY BB Bot API",
     version="1.0.0",
     description="Algorithmic trading bot for NIFTY weekly options",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -229,21 +258,26 @@ async def get_candles(count: int = 375) -> Dict:
     df = indicators.compute_all(df, bb_period=BB_PERIOD, bb_std=BB_STD)
     df = df.tail(max(1, int(count)))
 
-    def _num(v):
-        return None if v is None or pd.isna(v) else round(float(v), 2)
+    cols = ["open", "high", "low", "close", "bb_upper", "bb_middle", "bb_lower"]
+    out = df[["date", *cols]].copy()
+    out["time"] = pd.to_datetime(out["date"]).astype("int64") // 1_000_000_000
+    out[cols] = out[cols].round(2)
+    # NaN → None for JSON; ints stay native through to_dict
+    out = out.where(pd.notna(out), None)
 
-    candles = []
-    for _, row in df.iterrows():
-        candles.append({
-            "time": int(pd.Timestamp(row["date"]).timestamp()),
-            "open": _num(row["open"]),
-            "high": _num(row["high"]),
-            "low": _num(row["low"]),
-            "close": _num(row["close"]),
-            "bb_upper": _num(row.get("bb_upper")),
-            "bb_middle": _num(row.get("bb_middle")),
-            "bb_lower": _num(row.get("bb_lower")),
-        })
+    candles = [
+        {
+            "time": int(rec["time"]),
+            "open": rec["open"],
+            "high": rec["high"],
+            "low": rec["low"],
+            "close": rec["close"],
+            "bb_upper": rec["bb_upper"],
+            "bb_middle": rec["bb_middle"],
+            "bb_lower": rec["bb_lower"],
+        }
+        for rec in out.to_dict(orient="records")
+    ]
     return {"candles": candles, "count": len(candles)}
 
 

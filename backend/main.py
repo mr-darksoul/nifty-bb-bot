@@ -10,7 +10,6 @@ On every 1-min candle close, executes the full signal pipeline:
   6. Check trade limits
   7. Select ATM option
   8. Place order
-  9. Send Telegram alert
 
 Exit checks run on every candle close when a position is open.
 """
@@ -18,6 +17,7 @@ Exit checks run on every candle close when a position is open.
 import asyncio
 import logging
 import sys
+import threading
 from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Optional
@@ -42,29 +42,34 @@ from config import (
     MAX_TRADES_PER_DAY,
     PORT,
     SIGNAL_QUALITY_THRESHOLD,
+    TRENDING_DOWN_REGIME_ID,
     load_optimized_params,
     validate_secrets,
 )
 from indicators import compute_all
-from ml.feature_engineering import build_features, build_regime_features, get_signal_features_at_bar
-from ml.regime_detector import RegimeDetector, REGIME_NAMES
-from ml.signal_filter import SignalFilter
 from data_feed import DataFeed
 from options_selector import OptionsSelector
 from order_manager import OrderManager
-from telegram_notifier import (
-    notify_bot_started,
-    notify_bot_stopped,
-    notify_entry,
-    notify_exit,
-    notify_ml_filter,
-    notify_regime_filter,
-    notify_daily_summary,
-    notify_error,
-)
-from api_server import app, state
+from api_server import app, state, on_startup, on_shutdown
 
 logger = logging.getLogger(__name__)
+
+# ML modules are optional: a missing/broken ml package disables the trading
+# pipeline but must not stop the REST API (status, candles, backtest) from
+# serving. When unavailable, process_candle short-circuits.
+try:
+    from ml.feature_engineering import (
+        build_features,
+        build_regime_features,
+        get_signal_features_at_bar,
+    )
+    from ml.regime_detector import RegimeDetector, REGIME_NAMES
+    from ml.signal_filter import SignalFilter
+    _ML_AVAILABLE = True
+except Exception as _ml_exc:
+    logger.error(f'"ML modules unavailable: {_ml_exc} — trading pipeline disabled, API still serves"')
+    _ML_AVAILABLE = False
+    REGIME_NAMES = {0: "TRENDING_DOWN", 1: "CHOPPY", 2: "TRENDING_UP"}
 
 
 # ── Runtime globals ───────────────────────────────────────────────────────────
@@ -72,13 +77,14 @@ logger = logging.getLogger(__name__)
 data_feed = DataFeed()
 order_manager = OrderManager()
 options_selector = OptionsSelector()
-regime_detector = RegimeDetector()
-signal_filter = SignalFilter()
+regime_detector = RegimeDetector() if _ML_AVAILABLE else None
+signal_filter = SignalFilter() if _ML_AVAILABLE else None
 
 _bot_task: Optional[asyncio.Task] = None
 _stop_event = asyncio.Event()
 _candle_event = asyncio.Event()
 _latest_df: Optional[pd.DataFrame] = None
+_latest_df_lock = threading.Lock()   # guards _latest_df across the WS and async threads
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -125,7 +131,8 @@ def _refresh_state(df: pd.DataFrame) -> None:
 def on_candle_close(df: pd.DataFrame) -> None:
     """Called by DataFeed on every 1-min candle close. Runs in WebSocket thread."""
     global _latest_df
-    _latest_df = df
+    with _latest_df_lock:
+        _latest_df = df
     if _event_loop is None:
         logger.error('"Candle received before bot event loop was registered"')
         return
@@ -139,6 +146,8 @@ async def process_candle(df: pd.DataFrame) -> None:
     """
     if not _market_open():
         return
+    if not _ML_AVAILABLE:
+        return
 
     # ── Step 1: Compute indicators ────────────────────────────────────────────
     # Pass pre-computed df_ind into build_features so compute_all runs only once.
@@ -147,7 +156,6 @@ async def process_candle(df: pd.DataFrame) -> None:
         df_feat = build_features(df_ind)   # skips recompute since bb_upper present
     except Exception as exc:
         logger.error(f'"Indicator computation failed: {exc}"')
-        notify_error("Indicator computation", str(exc))
         return
 
     _refresh_state(df_feat)
@@ -178,7 +186,7 @@ async def process_candle(df: pd.DataFrame) -> None:
         state.regime_name = REGIME_NAMES.get(current_regime, "UNKNOWN")
     except Exception as exc:
         logger.warning(f'"Regime detection failed: {exc} — blocking entry (TRENDING_DOWN)"')
-        current_regime = 0  # TRENDING_DOWN — blocks entry; safe failure
+        current_regime = TRENDING_DOWN_REGIME_ID  # blocks entry; safe failure
         state.regime = current_regime
         state.regime_name = "UNKNOWN"
 
@@ -223,7 +231,6 @@ async def process_candle(df: pd.DataFrame) -> None:
 
     if score < SIGNAL_QUALITY_THRESHOLD:
         logger.info(f'"ML filter rejected: score={score:.3f} < {SIGNAL_QUALITY_THRESHOLD}"')
-        notify_ml_filter(pb, score, SIGNAL_QUALITY_THRESHOLD)
         return
 
     # Steps 7–10: Select option, place order, alert
@@ -297,22 +304,8 @@ async def _do_entry(
         if trade is None:
             return
 
-        notify_entry(
-            trade_id=trade.trade_id,
-            direction=direction,
-            symbol=symbol,
-            strike=strike,
-            entry_price=trade.entry_price,
-            quantity=trade.quantity,
-            percent_b=pb,
-            signal_quality_score=score,
-            regime_name=REGIME_NAMES.get(regime, "UNKNOWN"),
-            dry_run=DRY_RUN,
-        )
-
     except Exception as exc:
         logger.error(f'"Entry failed: {exc}"')
-        notify_error("Entry execution", str(exc))
 
 
 async def _do_exit(df_feat: pd.DataFrame, reason: str) -> None:
@@ -327,21 +320,9 @@ async def _do_exit(df_feat: pd.DataFrame, reason: str) -> None:
             ltp = state.nifty_price * 0.01   # fallback
 
         pb = float(df_feat.iloc[-1].get("percent_b", 0.5) or 0.5)
-        closed = order_manager.exit_trade(ltp=ltp, percent_b=pb, reason=reason)
-
-        if closed:
-            notify_exit(
-                trade_id=closed.trade_id,
-                symbol=closed.symbol,
-                exit_price=closed.exit_price,
-                pnl=closed.pnl,
-                exit_reason=reason,
-                daily_pnl=order_manager.today_pnl(),
-                dry_run=DRY_RUN,
-            )
+        order_manager.exit_trade(ltp=ltp, percent_b=pb, reason=reason)
     except Exception as exc:
         logger.error(f'"Exit failed: {exc}"')
-        notify_error("Exit execution", str(exc))
 
 
 def _end_of_day_summary() -> None:
@@ -350,7 +331,7 @@ def _end_of_day_summary() -> None:
     pnl = order_manager.today_pnl()
     wins = sum(1 for t in today if t.pnl > 0)
     win_rate = wins / n if n > 0 else 0.0
-    notify_daily_summary(n, pnl, win_rate, DRY_RUN)
+    logger.info(f'"Daily summary: trades={n} win_rate={win_rate:.0%} pnl=₹{pnl:.2f}"')
 
 
 # ── Bot loop ──────────────────────────────────────────────────────────────────
@@ -358,8 +339,7 @@ def _end_of_day_summary() -> None:
 async def _bot_loop() -> None:
     """Main async trading loop: waits for candle events and runs the pipeline."""
     state.bot_running = True
-    logger.info('"Bot loop started"')
-    notify_bot_started(DRY_RUN)
+    logger.info(f'"Bot loop started (DRY_RUN={DRY_RUN})"')
 
     try:
         while not _stop_event.is_set():
@@ -376,7 +356,8 @@ async def _bot_loop() -> None:
             if _stop_event.is_set():
                 break
 
-            df = _latest_df
+            with _latest_df_lock:
+                df = _latest_df
             if df is not None and len(df) >= 20:
                 await process_candle(df)
 
@@ -384,7 +365,6 @@ async def _bot_loop() -> None:
         logger.info('"Bot loop cancelled"')
     except Exception as exc:
         logger.error(f'"Bot loop error: {exc}"')
-        notify_error("Bot loop", str(exc))
     finally:
         state.bot_running = False
         logger.info('"Bot loop exited"')
@@ -404,9 +384,11 @@ async def _stop_bot() -> None:
     _stop_event.set()
 
     # Force-exit any open position
-    if order_manager.has_open_position and _latest_df is not None:
+    with _latest_df_lock:
+        latest_df = _latest_df
+    if order_manager.has_open_position and latest_df is not None and _ML_AVAILABLE:
         try:
-            df_ind = compute_all(_latest_df.copy())
+            df_ind = compute_all(latest_df.copy())
             df_feat = build_features(df_ind)
             await _do_exit(df_feat, reason="BOT_STOP")
         except Exception as exc:
@@ -420,18 +402,18 @@ async def _stop_bot() -> None:
         except asyncio.CancelledError:
             pass
 
-    notify_bot_stopped()
     logger.info('"Bot stopped"')
 
 
 # ── Startup / Shutdown ────────────────────────────────────────────────────────
 
-@app.on_event("startup")
+@on_startup
 async def startup_event() -> None:
     """Initialise models, register callbacks, wire state."""
     # Load ML models (degrade gracefully if missing)
-    regime_detector.load()
-    signal_filter.load()
+    if _ML_AVAILABLE:
+        regime_detector.load()
+        signal_filter.load()
 
     # Load today's trades from CSV (restart recovery)
     order_manager.load_today_from_csv()
@@ -457,7 +439,7 @@ async def startup_event() -> None:
     logger.info('"API server startup complete"')
 
 
-@app.on_event("shutdown")
+@on_shutdown
 async def shutdown_event() -> None:
     if state.bot_running:
         await _stop_bot()

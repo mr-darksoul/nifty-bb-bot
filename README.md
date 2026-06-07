@@ -32,10 +32,10 @@ real-time dashboard, and automated execution via Zerodha Kite Connect.
 │  │  selector   │  │  │  filter    │  │  │  order_manager.py   │  │
 │  └──────────────┘  │  │  (XGB)     │  │  │  CSV trade log      │  │
 │                    │  ├────────────┤  │  └─────────────────────┘  │
-│  ┌──────────────┐  │  │  param     │  │                           │
-│  │  telegram_   │  │  │  optimizer │  │                           │
-│  │  notifier   │  │  │  (Optuna)  │  │                           │
-│  └──────────────┘  │  └────────────┘  │                           │
+│                    │  │  param     │  │                           │
+│                    │  │  optimizer │  │                           │
+│                    │  │  (Optuna)  │  │                           │
+│                    │  └────────────┘  │                           │
 │                    └──────────────────┘                            │
 └─────────────────────────────────────────────────────────────────────┘
                              │
@@ -57,7 +57,7 @@ cd nifty-bb-bot
 
 # 2. Fill in environment variables
 cp backend/.env.example backend/.env
-# Edit backend/.env with your Kite API keys, Telegram credentials, etc.
+# Edit backend/.env with your Kite API keys, API_AUTH_TOKEN, etc.
 
 # 3. Install Python dependencies
 cd backend
@@ -162,7 +162,7 @@ You can also trigger a manual retraining from the **Actions** tab → "Weekly Mo
 
 When `DRY_RUN=true` (default in `.env.example`):
 - All orders are **logged** but `kite.place_order()` is **never called**
-- Telegram alerts include `[DRY RUN]` prefix
+- Log lines include a `[DRY RUN]` prefix
 - All P&L figures are simulated based on LTP at signal time
 - The trade log CSV is still written
 
@@ -241,8 +241,6 @@ Every 5-min candle close:
 KITE_API_KEY=           # From Zerodha developer console
 KITE_API_SECRET=        # From Zerodha developer console
 KITE_ACCESS_TOKEN=      # Generated daily via OAuth flow
-TELEGRAM_BOT_TOKEN=     # From @BotFather on Telegram
-TELEGRAM_CHAT_ID=       # Your Telegram chat ID
 FRONTEND_ORIGIN=        # e.g. https://yourname.github.io
 API_AUTH_TOKEN=         # Long random token required by the dashboard/API
 PORT=8000               # Server port (Railway sets this automatically)
