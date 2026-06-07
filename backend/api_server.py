@@ -104,6 +104,19 @@ class BotState:
         self.data_feed: Optional[Any] = None
         self._start_fn: Optional[Any] = None
         self._stop_fn: Optional[Any] = None
+        # ── Multi-source intelligence state ────────────────────────────────────
+        self.fusion_confidence: float = 0.0
+        self.fusion_components: dict = {}
+        self.fusion_reasons: list = []
+        self.fusion_blocking: list = []
+        self.vwap: float = 0.0
+        self.pcr: float = 1.0
+        self.oi_bias: str = "NEUTRAL"
+        self.sentiment_score: float = 0.0
+        self.sentiment_halt: bool = False
+        self.mtf_alignment: int = 0        # -3 to +3
+        self.pdh: float = 0.0
+        self.pdl: float = 0.0
 
 
 state = BotState()
@@ -202,6 +215,18 @@ async def get_status() -> Dict:
         "daily_pnl": round(state.daily_pnl, 2),
         "strike_candidates": state.strike_candidates,
         "timestamp": datetime.now().isoformat(),
+        # Multi-source intelligence snapshot
+        "fusion_confidence": round(state.fusion_confidence, 1),
+        "fusion_components": state.fusion_components,
+        "fusion_blocking": state.fusion_blocking,
+        "vwap": round(state.vwap, 2),
+        "pcr": round(state.pcr, 3),
+        "oi_bias": state.oi_bias,
+        "sentiment_score": round(state.sentiment_score, 3),
+        "sentiment_halt": state.sentiment_halt,
+        "mtf_alignment": state.mtf_alignment,
+        "pdh": round(state.pdh, 2),
+        "pdl": round(state.pdl, 2),
     }
 
 
@@ -218,6 +243,16 @@ async def get_indicators() -> Dict:
         "regime_name": state.regime_name,
         "signal": state.signal,
         "signal_quality_score": round(state.signal_quality_score, 4),
+        # Multi-source intelligence
+        "mtf_alignment": state.mtf_alignment,
+        "vwap": round(state.vwap, 2),
+        "pcr": round(state.pcr, 3),
+        "oi_bias": state.oi_bias,
+        "sentiment_score": round(state.sentiment_score, 3),
+        "fusion_confidence": round(state.fusion_confidence, 1),
+        "fusion_reasons": state.fusion_reasons,
+        "pdh": round(state.pdh, 2),
+        "pdl": round(state.pdl, 2),
     }
 
 

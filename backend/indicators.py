@@ -98,6 +98,22 @@ def atr_percentile(atr_series: pd.Series, lookback: int = 50) -> pd.Series:
     return atr_series.rolling(window=lookback).rank(pct=True) * 100.0
 
 
+def resample_ohlc(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
+    """Resample a 1-min OHLCV frame to an N-minute frame.
+
+    Used so the same engine/feature code can run on a higher timeframe (the
+    momentum_breakout strategy trades 15-min bars, where the BB band-break has
+    genuine follow-through; 1-min extremes are noise). minutes<=1 is a no-op.
+    """
+    if minutes is None or minutes <= 1:
+        return df.copy()
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last"}
+    if "volume" in df.columns:
+        agg["volume"] = "sum"
+    out = df.resample(f"{minutes}min").agg(agg).dropna(subset=["open", "high", "low", "close"])
+    return out
+
+
 def compute_all(df: pd.DataFrame, bb_period: int = 20, bb_std: float = 2.0) -> pd.DataFrame:
     """
     Compute and attach all indicators to an OHLCV DataFrame in-place.

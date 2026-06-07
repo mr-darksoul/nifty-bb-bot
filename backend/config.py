@@ -64,8 +64,11 @@ ENTRY_START_HOUR: int = 9
 ENTRY_START_MIN: int = 35   # earliest bar for new entries; allows warm-up + skips gap-open noise
 FORCE_EXIT_HOUR: int = 15
 FORCE_EXIT_MIN: int = 10
-MIN_DAYS_TO_EXPIRY: int = 0  # 0 = trade expiry-day (0 DTE) options; raise to 1+ to roll to next week
-MAX_DAYS_TO_EXPIRY: int = 7  # cap historical/live selection to current/next weekly options
+# Days-to-expiry window for option selection. The momentum strategy BUYS options,
+# so it avoids 0-DTE (lethal theta) and targets a few days out where the validated
+# edge survives. Override via env. (Mean-reversion legacy used MIN=0.)
+MIN_DAYS_TO_EXPIRY: int = int(os.getenv("MIN_DAYS_TO_EXPIRY", "4"))
+MAX_DAYS_TO_EXPIRY: int = int(os.getenv("MAX_DAYS_TO_EXPIRY", "12"))
 
 # ── Candle interval ───────────────────────────────────────────────────────────
 
@@ -83,19 +86,59 @@ ATR_PERIOD: int = 14
 EMA_FAST: int = 9
 EMA_SLOW: int = 21
 
+# ── Strategy selector ─────────────────────────────────────────────────────────
+# "momentum_breakout" (default): on STRATEGY_TIMEFRAME_MIN bars, BUY in the
+#   direction of a Bollinger band break (%b crosses out of the band) and ride it
+#   with an ATR target/stop. Validated edge for long options on NIFTY.
+# "mean_reversion" (legacy): fade %b extremes on 1-min bars. Kept for comparison;
+#   research shows it has no edge.
+STRATEGY: str = os.getenv("STRATEGY", "momentum_breakout")
+STRATEGY_TIMEFRAME_MIN: int = int(os.getenv("STRATEGY_TIMEFRAME_MIN", "15"))
+
 # ── Strategy parameter defaults (used when optimized_params.json missing) ────
+# Interpretation depends on "strategy":
+#   momentum_breakout: bb_overbought/bb_oversold are the OUTWARD cross levels
+#     (~1.0 / ~0.0 = a true band break); entry fires when %b crosses through.
+#   mean_reversion: bb_oversold/bb_overbought are the inward extremes to fade.
+# bb_exit / sl_buffer are ATR multiples for the price-anchored target / stop.
 
 DEFAULT_PARAMS: dict = {
+    "strategy": STRATEGY,
+    "timeframe_min": STRATEGY_TIMEFRAME_MIN,
+    "bb_oversold": 0.0,
+    "bb_overbought": 1.0,
+    "bb_exit": 2.5,
+    "sl_buffer": 1.0,
+    "rsi_min": 0,
+    "rsi_max": 100,
+    "min_atr_pct": 0.0,
+}
+
+# Legacy mean-reversion defaults (1-min fade). Used only when strategy override
+# selects mean_reversion without an optimized_params.json present.
+MEAN_REVERSION_PARAMS: dict = {
+    "strategy": "mean_reversion",
+    "timeframe_min": 1,
     "bb_oversold": 0.05,
     "bb_overbought": 0.95,
-    # ATR multiples from entry spot price (price-anchored exits, not %b levels).
-    # bb_exit = profit target in ATR units; sl_buffer = stop loss in ATR units.
     "bb_exit": 1.5,
     "sl_buffer": 0.75,
     "rsi_min": 35,
     "rsi_max": 65,
-    "min_atr_pct": 60.0,   # only trade when ATR is in top ~40% (move clears costs)
+    "min_atr_pct": 60.0,
 }
+
+# ── Multi-source signal fusion (opt-in) ──────────────────────────────────────
+# When enabled, every BB breakout signal must also pass the full confluence
+# scoring engine (signal_fusion.py) which combines multi-timeframe alignment,
+# VWAP position, options OI/PCR, news sentiment, and S/R proximity.
+# Target: 70% win rate at 1:3 R:R. Trades will be fewer but higher quality.
+# Disable to revert to pure BB %b momentum strategy.
+USE_SIGNAL_FUSION: bool = os.getenv("USE_SIGNAL_FUSION", "true").lower() in ("true", "1", "yes")
+SIGNAL_FUSION_THRESHOLD: float = float(os.getenv("SIGNAL_FUSION_THRESHOLD", "60.0"))
+
+# Optional NewsAPI key for broader news sentiment coverage (free tier: 100 req/day)
+NEWS_API_KEY: str = os.getenv("NEWS_API_KEY", "")
 
 # ── ML overlay filters (opt-in) ──────────────────────────────────────────────
 # The optimizer tunes the BASE strategy (BB %b + RSI + ATR-percentile gate +

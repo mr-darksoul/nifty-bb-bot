@@ -52,6 +52,7 @@ def run_backtest(
     from config import DEFAULT_PARAMS
     p = {**DEFAULT_PARAMS, **(params or {})}
 
+    strategy: str = p.get("strategy", "mean_reversion")
     bb_oversold: float = p["bb_oversold"]
     bb_overbought: float = p["bb_overbought"]
     bb_exit: float = p["bb_exit"]
@@ -175,10 +176,21 @@ def run_backtest(
                 continue
 
             direction = 0
-            if pb_val < bb_oversold:
-                direction = 1   # CE
-            elif pb_val > bb_overbought:
-                direction = -1  # PE
+            if strategy == "momentum_breakout":
+                # Ride the band break: enter when %b crosses OUTWARD through the
+                # band on this bar (needs the prior bar's %b).
+                prev_pb = pb.iloc[i - 1] if i > 0 else pb_val
+                if not pd.isna(prev_pb):
+                    if prev_pb <= bb_overbought and pb_val > bb_overbought:
+                        direction = 1    # upside break → CE
+                    elif prev_pb >= bb_oversold and pb_val < bb_oversold:
+                        direction = -1   # downside break → PE
+            else:
+                # mean_reversion: fade the extreme
+                if pb_val < bb_oversold:
+                    direction = 1   # CE
+                elif pb_val > bb_overbought:
+                    direction = -1  # PE
 
             if direction != 0:
                 in_trade = True

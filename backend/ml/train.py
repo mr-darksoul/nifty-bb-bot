@@ -183,16 +183,26 @@ def step_train_regime(df: pd.DataFrame) -> RegimeDetector:
 def step_label_signals(df_feat: pd.DataFrame, params: dict) -> pd.Series:
     logger.info("Step 4: Labelling signals for signal filter training")
     pb = df_feat["percent_b"]
-    entry_mask = (pb < params["bb_oversold"]) | (pb > params["bb_overbought"])
+    strategy = params.get("strategy", "mean_reversion")
     direction = pd.Series(0, index=df_feat.index)
-    direction[pb < params["bb_oversold"]] = 1
-    direction[pb > params["bb_overbought"]] = -1
+    if strategy == "momentum_breakout":
+        # Entry = outward band cross (matches the engine's breakout entry).
+        prev = pb.shift(1)
+        up = (prev <= params["bb_overbought"]) & (pb > params["bb_overbought"])
+        dn = (prev >= params["bb_oversold"]) & (pb < params["bb_oversold"])
+        direction[up] = 1
+        direction[dn] = -1
+    else:
+        direction[pb < params["bb_oversold"]] = 1
+        direction[pb > params["bb_overbought"]] = -1
+    entry_mask = direction != 0
     labels = label_signals(
         df_feat, entry_mask, direction,
         params["bb_exit"], params["sl_buffer"]
     )
     n_labelled = labels.notna().sum()
-    logger.info(f"Labelled {n_labelled} signals (positive rate: {labels.dropna().mean():.1%})")
+    rate = labels.dropna().mean() if n_labelled else 0.0
+    logger.info(f"Labelled {n_labelled} signals (positive rate: {rate:.1%})")
     return labels
 
 
@@ -215,8 +225,11 @@ def step_train_signal_filter(df_feat: pd.DataFrame, labels: pd.Series) -> Signal
 
 
 def step_optimize(df_feat: pd.DataFrame, n_trials: int) -> dict:
-    logger.info(f"Step 6: Bayesian walk-forward optimization ({n_trials} trials)")
-    best = optimize(df_feat, n_trials=n_trials)
+    from config import STRATEGY, STRATEGY_TIMEFRAME_MIN
+    logger.info(f"Step 6: Bayesian walk-forward optimization ({n_trials} trials, "
+                f"strategy={STRATEGY} tf={STRATEGY_TIMEFRAME_MIN}min)")
+    best = optimize(df_feat, n_trials=n_trials,
+                    strategy=STRATEGY, timeframe_min=STRATEGY_TIMEFRAME_MIN)
     save_params(best)
     logger.info(f"Optimized params: {best}")
     return best
@@ -280,10 +293,21 @@ def main() -> None:
 
     logger.info(f"Data loaded: {len(df)} bars from {df.index[0]} to {df.index[-1]}")
 
+    # Resample 1-min → strategy timeframe so every downstream step (features,
+    # regime, labels, optimizer, report) operates on the bars the strategy trades.
+    from config import STRATEGY, STRATEGY_TIMEFRAME_MIN
+    from indicators import resample_ohlc
+    if STRATEGY_TIMEFRAME_MIN > 1:
+        df = resample_ohlc(df, STRATEGY_TIMEFRAME_MIN)
+        logger.info(f"Resampled to {STRATEGY_TIMEFRAME_MIN}-min: {len(df)} bars (strategy={STRATEGY})")
+
     df_feat = step_features(df)
     step_train_regime(df)
 
-    params = load_optimized_params()  # use current best as label reference
+    # Label reference params: use the live default for the active strategy so the
+    # (opt-in) signal filter trains on the same entry definition the engine uses.
+    from config import DEFAULT_PARAMS
+    params = {**DEFAULT_PARAMS, **load_optimized_params()}
     labels = step_label_signals(df_feat, params)
     step_train_signal_filter(df_feat, labels)
 
