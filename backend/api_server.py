@@ -260,7 +260,11 @@ async def get_candles(count: int = 375) -> Dict:
 
     cols = ["open", "high", "low", "close", "bb_upper", "bb_middle", "bb_lower"]
     out = df[["date", *cols]].copy()
-    out["time"] = pd.to_datetime(out["date"]).astype("int64") // 1_000_000_000
+    # Epoch seconds — resolution- and tz-safe. Kite returns tz-aware timestamps
+    # that pandas 2.x may hold at microsecond resolution, so astype("int64")//1e9
+    # would be 1000× too small. Timedelta floor-division is resolution-proof.
+    dt = pd.to_datetime(out["date"], utc=True)
+    out["time"] = (dt - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta("1s")
     out[cols] = out[cols].round(2)
     # NaN → None for JSON; ints stay native through to_dict
     out = out.where(pd.notna(out), None)
