@@ -48,7 +48,14 @@ NIFTY_SYMBOL: str = "NIFTY 50"
 NFO_EXCHANGE: str = "NFO"
 NSE_EXCHANGE: str = "NSE"
 LOT_SIZE: int = 65                       # NIFTY options lot size from NSE/FAOP/70616
-CAPITAL_PER_TRADE: float = 5_000.0       # ₹ maximum premium value per trade
+# ₹ maximum premium value per trade. Set to fit ~1 ATM weekly lot (~₹150-280 ×
+# 65 ≈ ₹10-18k). The selector buys the nearest strike to ATM whose one-lot
+# premium fits this cap, so a cap >= one ATM lot makes it trade ATM rather than
+# far-OTM. ATM is the only instrument the breakout edge survives on: at ~₹177
+# premium a realistic ₹0.5-1.0/side bid-ask is a small % of premium and the edge
+# clears it (PF ~1.18), whereas far-OTM (~₹70, cap ₹5k) is eaten by its wider
+# relative spread (PF ~0.95). See research/revalidate_model.py.
+CAPITAL_PER_TRADE: float = float(os.getenv("CAPITAL_PER_TRADE", "18000"))
 BROKERAGE_PER_ORDER: float = 20.0       # Zerodha flat ₹20
 SLIPPAGE_PCT: float = 0.00003           # applied to underlying price; ~₹40 round-trip option impact
 # Per-day trade cap. Effectively unlimited by default — entries are throttled by

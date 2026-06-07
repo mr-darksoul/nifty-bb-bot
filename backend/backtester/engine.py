@@ -71,6 +71,8 @@ def run_backtest(
 
     pb = df["percent_b"]
     close = df["close"]
+    high = df["high"]
+    low = df["low"]
     atr_series = df["atr"]
     # ATR percentile (rolling rank, 0–100). Absent in older frames → treat as
     # always-passing so the gate is a no-op.
@@ -80,6 +82,17 @@ def run_backtest(
         atr_pct_series = pd.Series(100.0, index=df.index)
     rsi_series = df["rsi"] if "rsi" in df.columns else pd.Series(50.0, index=df.index)
     idx = df.index
+
+    # Bar length in minutes, inferred from the index spacing. The engine is run
+    # on whatever timeframe the strategy uses (15-min for momentum_breakout), so
+    # reporting durations in real minutes requires the actual bar size — using a
+    # hard-coded 1-min interval understated every duration by 15×.
+    if len(idx) > 1:
+        _deltas = pd.Series(idx).diff().dropna().dt.total_seconds().div(60).round()
+        bar_minutes = int(_deltas.mode().iloc[0]) if not _deltas.empty else CANDLE_INTERVAL_MINUTES
+    else:
+        bar_minutes = CANDLE_INTERVAL_MINUTES
+    bar_minutes = max(1, bar_minutes)
 
     trades = []
     in_trade = False
@@ -113,7 +126,7 @@ def run_backtest(
             trades.append(_make_trade(
                 entry_time, ts, entry_direction, entry_price, close.iloc[i],
                 pnl, EXIT_REASON_FORCE, i - entry_iloc,
-                int(round(entry_spot / 50) * 50),
+                int(round(entry_spot / 50) * 50), bar_minutes,
             ))
             in_trade = False
             continue
@@ -128,32 +141,36 @@ def run_backtest(
         if in_trade:
             exit_triggered = False
             reason = ""
-            cur_price = close.iloc[i]
+            fill_price = 0.0
+            bar_high = high.iloc[i]
+            bar_low = low.iloc[i]
 
+            # Intrabar fills: a target/stop is hit when the bar's RANGE reaches it,
+            # not only when the bar CLOSES through it. Testing close-only is
+            # look-ahead-optimistic — it silently ignores stops pierced mid-bar
+            # that the live bot (which samples spot every minute) would honour,
+            # which inflated both win rate and P&L. When both levels sit inside one
+            # bar we assume the STOP filled first (conservative worst-case order).
             if entry_direction == 1:     # CE: profit when price rises
-                if cur_price >= target_price:
-                    reason = EXIT_REASON_TARGET
-                    exit_triggered = True
-                elif cur_price <= sl_price:
-                    reason = EXIT_REASON_SL
-                    exit_triggered = True
+                if bar_low <= sl_price:
+                    reason = EXIT_REASON_SL; fill_price = sl_price; exit_triggered = True
+                elif bar_high >= target_price:
+                    reason = EXIT_REASON_TARGET; fill_price = target_price; exit_triggered = True
             else:                        # PE: profit when price falls
-                if cur_price <= target_price:
-                    reason = EXIT_REASON_TARGET
-                    exit_triggered = True
-                elif cur_price >= sl_price:
-                    reason = EXIT_REASON_SL
-                    exit_triggered = True
+                if bar_high >= sl_price:
+                    reason = EXIT_REASON_SL; fill_price = sl_price; exit_triggered = True
+                elif bar_low <= target_price:
+                    reason = EXIT_REASON_TARGET; fill_price = target_price; exit_triggered = True
 
             if exit_triggered:
                 pnl = _calc_pnl(
-                    entry_direction, entry_price, cur_price,
+                    entry_direction, entry_price, fill_price,
                     atr_series.iloc[i], entry_iloc, i
                 )
                 trades.append(_make_trade(
-                    entry_time, ts, entry_direction, entry_price, cur_price,
+                    entry_time, ts, entry_direction, entry_price, fill_price,
                     pnl, reason, i - entry_iloc,
-                    int(round(entry_spot / 50) * 50),
+                    int(round(entry_spot / 50) * 50), bar_minutes,
                 ))
                 in_trade = False
                 continue
@@ -217,7 +234,7 @@ def run_backtest(
         trades.append(_make_trade(
             entry_time, idx[i], entry_direction, entry_price, close.iloc[i],
             pnl, EXIT_REASON_EOD, i - entry_iloc,
-            int(round(entry_spot / 50) * 50),
+            int(round(entry_spot / 50) * 50), bar_minutes,
         ))
 
     # ── Assemble results ───────────────────────────────────────────────────────
@@ -274,6 +291,7 @@ def _make_trade(
     reason: str,
     duration_bars: int,
     atm_strike: int = 0,
+    bar_minutes: int = CANDLE_INTERVAL_MINUTES,
 ) -> dict:
     return {
         "entry_time": entry_time,
@@ -283,6 +301,6 @@ def _make_trade(
         "exit_price": round(exit_price, 2),
         "pnl": round(pnl, 2),
         "exit_reason": reason,
-        "duration_min": duration_bars * CANDLE_INTERVAL_MINUTES,
+        "duration_min": duration_bars * bar_minutes,
         "atm_strike": atm_strike,
     }

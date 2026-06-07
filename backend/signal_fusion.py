@@ -33,7 +33,13 @@ W_OPTIONS_OI    = 10   # PCR / OI bias
 W_SENTIMENT     = 10   # news not adverse
 W_ATR_GATE      = 5    # volatility in tradeable range
 
-ENTRY_THRESHOLD: float = 60.0   # minimum confidence to approve entry
+# Minimum confidence to approve entry. Sourced from config so the env override
+# (SIGNAL_FUSION_THRESHOLD) actually takes effect — previously this was a
+# hard-coded 60.0 that silently ignored the configured value.
+try:
+    from config import SIGNAL_FUSION_THRESHOLD as ENTRY_THRESHOLD
+except Exception:
+    ENTRY_THRESHOLD: float = 60.0
 
 # ATR percentile gate (from indicators.atr_percentile, 0–100 scale)
 ATR_PCT_MIN: float = 25.0
