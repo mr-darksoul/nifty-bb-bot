@@ -17,6 +17,7 @@ from config import (
     CAPITAL_PER_TRADE,
     DRY_RUN,
     LOT_SIZE,
+    LOTS_PER_TRADE,
     NFO_EXCHANGE,
     SLIPPAGE_PCT,
     TRADE_LOG_PATH,
@@ -131,11 +132,13 @@ class OrderManager:
             )
             return None
 
-        quantity = int(CAPITAL_PER_TRADE / entry_price / LOT_SIZE) * LOT_SIZE
+        # Fixed-lot sizing (premium-independent). CAPITAL_PER_TRADE is only a
+        # ceiling, checked above — we do NOT scale up lots to fill it, because
+        # that perversely buys more of the cheapest (highest-gamma) options.
+        quantity = LOTS_PER_TRADE * LOT_SIZE
         if quantity <= 0:
             logger.error(
-                f'"Cannot enter trade: computed quantity=0 for {symbol} '
-                f'entry_price={entry_price:.2f} CAPITAL_PER_TRADE={CAPITAL_PER_TRADE} LOT_SIZE={LOT_SIZE}"'
+                f'"Cannot enter trade: LOTS_PER_TRADE={LOTS_PER_TRADE} LOT_SIZE={LOT_SIZE} -> quantity=0"'
             )
             return None
 

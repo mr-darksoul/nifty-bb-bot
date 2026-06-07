@@ -17,6 +17,7 @@ from config import (
     ENTRY_START_HOUR,
     ENTRY_START_MIN,
     LOT_SIZE,
+    LOTS_PER_TRADE,
     MAX_TRADES_PER_DAY,
     SLIPPAGE_PCT,
     CAPITAL_PER_TRADE,
@@ -275,10 +276,11 @@ def _calc_pnl(
     exit_with_slip = exit_price * (1 - direction * SLIPPAGE_PCT)
     price_change = (exit_with_slip - entry_price) * direction   # positive = win for direction
     # Approximate option price move = delta * underlying move
-    # Since entry_price here IS already the underlying (CE/PE share moves with delta)
-    option_pnl_per_lot = ATM_DELTA * price_change * LOT_SIZE
-    option_pnl_per_lot -= 2 * BROKERAGE_PER_ORDER
-    return float(option_pnl_per_lot)
+    # Since entry_price here IS already the underlying (CE/PE share moves with delta).
+    # Fixed-lot sizing (LOTS_PER_TRADE) so the proxy matches live/option_pricer.
+    option_pnl = ATM_DELTA * price_change * LOT_SIZE * LOTS_PER_TRADE
+    option_pnl -= 2 * BROKERAGE_PER_ORDER
+    return float(option_pnl)
 
 
 def _make_trade(

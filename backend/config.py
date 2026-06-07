@@ -56,6 +56,14 @@ LOT_SIZE: int = 65                       # NIFTY options lot size from NSE/FAOP/
 # clears it (PF ~1.18), whereas far-OTM (~₹70, cap ₹5k) is eaten by its wider
 # relative spread (PF ~0.95). See research/revalidate_model.py.
 CAPITAL_PER_TRADE: float = float(os.getenv("CAPITAL_PER_TRADE", "18000"))
+# Fixed number of lots per trade (premium-INDEPENDENT sizing). Previously the
+# bot bought as many lots as the cap allowed (int(cap/premium/lot)), which made
+# cheaper options get MORE lots — concentrating leverage on low-premium, higher-
+# gamma contracts that move most violently against you. Empirically that doubled
+# size on the losing trades. Fixed lots removes the perverse incentive and makes
+# live sizing match the 1-lot delta-proxy backtest. CAPITAL_PER_TRADE stays as a
+# safety ceiling (a trade is rejected if one lot exceeds it).
+LOTS_PER_TRADE: int = int(os.getenv("LOTS_PER_TRADE", "1"))
 BROKERAGE_PER_ORDER: float = 20.0       # Zerodha flat ₹20
 SLIPPAGE_PCT: float = 0.00003           # applied to underlying price; ~₹40 round-trip option impact
 # Per-day trade cap. Effectively unlimited by default — entries are throttled by

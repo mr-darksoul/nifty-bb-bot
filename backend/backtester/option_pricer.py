@@ -24,6 +24,7 @@ from config import (
     BROKERAGE_PER_ORDER,
     CAPITAL_PER_TRADE,
     LOT_SIZE,
+    LOTS_PER_TRADE,
     MAX_DAYS_TO_EXPIRY,
     MIN_DAYS_TO_EXPIRY,
     SLIPPAGE_PCT,
@@ -227,7 +228,9 @@ def enrich_with_real_option_prices(
 
         candidate, entry_ltp, exit_ltp, actual_entry, one_lot_value = selected
         actual_exit  = round(exit_ltp  * (1 - SLIPPAGE_PCT), 2)
-        quantity     = int(CAPITAL_PER_TRADE / actual_entry / LOT_SIZE) * LOT_SIZE
+        # Fixed-lot sizing, matching order_manager (premium-independent). The cap
+        # was already enforced in candidate selection above (one_lot_value <= cap).
+        quantity     = LOTS_PER_TRADE * LOT_SIZE
         if quantity <= 0:
             real_entry_ltps.append(None)
             real_exit_ltps.append(None)
