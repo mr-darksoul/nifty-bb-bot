@@ -514,8 +514,13 @@ async def update_params(body: Dict) -> Dict:
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid parameter value: {exc}")
 
-    if not (0 < params["bb_oversold"] < params["bb_overbought"] < 1):
-        raise HTTPException(status_code=400, detail="bb_oversold must be < bb_overbought and both in (0, 1)")
+    # %b cross thresholds. For momentum_breakout these are the TRUE band edges
+    # (bb_oversold=0.0 = close at/below the lower band, bb_overbought=1.0 = close
+    # at/above the upper band) — the validated config. Bounds must be INCLUSIVE;
+    # the old open-interval (0,1) check wrongly rejected 0.0/1.0 (a mean-reversion
+    # assumption). Keep oversold < overbought to prevent inversion.
+    if not (0 <= params["bb_oversold"] < params["bb_overbought"] <= 1):
+        raise HTTPException(status_code=400, detail="bb_oversold must be < bb_overbought, both in [0, 1]")
     if not (0 < params["bb_exit"] <= 10):
         raise HTTPException(status_code=400, detail="bb_exit (ATR multiple) must be in (0, 10]")
     if not (0 < params["sl_buffer"] <= 10):
