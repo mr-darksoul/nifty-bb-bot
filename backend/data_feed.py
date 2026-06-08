@@ -243,8 +243,13 @@ class DataFeed:
                 logger.info('"DataFeed resume: Kite token changed — rebuilding ticker"')
                 self._reconnect_with_new_token(api_key, access_token)
             else:
+                # Same token: just re-enable tick processing. Do NOT call
+                # connect() again — each connect() spins up a new Twisted retry
+                # factory, and stop_retry() only ever stops the latest one, so a
+                # second connect() leaves an orphaned factory reconnecting
+                # forever. KiteTicker's own auto-reconnect keeps the single
+                # connection alive across the pause.
                 logger.info('"DataFeed resumed (reactor kept alive)"')
-                self._ensure_connected()
             return
 
         # First start: build the ticker and launch the reactor thread once.
@@ -274,18 +279,27 @@ class DataFeed:
         self._ws = new
         self._ws_token = access_token
 
+        # Detach the old ticker's callbacks so a lingering socket can't feed
+        # stale ticks into the builder during the swap.
+        if old is not None:
+            old.on_ticks = lambda ws, ticks: None
+            old.on_connect = lambda ws, response: None
+
         def _swap():
             # Runs in the reactor thread (via callFromThread): safe to touch
-            # Twisted protocol/factory state here.
+            # Twisted protocol/factory state here. The old ticker was connect()'d
+            # exactly once, so it has a single retry factory that stop_retry()
+            # reliably halts — no orphaned reconnect loop survives.
             try:
                 if old is not None:
-                    old.stop_retry()          # stop stale-token reconnect attempts
+                    old.stop_retry()          # halt the single retry factory
                     old._close(reason="token rotated")
             except Exception as exc:
                 logger.error(f'"Old ticker close failed: {exc}"')
             try:
                 # Reactor is already running, so connect() just opens a fresh
-                # WebSocket and does NOT attempt to start the reactor.
+                # WebSocket and does NOT attempt to start the reactor. Called
+                # exactly once for this ticker.
                 new.connect(threaded=True)
             except Exception as exc:
                 logger.error(f'"Ticker reconnect (new token) failed: {exc}"')
@@ -304,25 +318,6 @@ class DataFeed:
                 ).start()
         except Exception as exc:
             logger.error(f'"DataFeed token-rotation reconnect failed: {exc}"')
-
-    def _ensure_connected(self) -> None:
-        """Best-effort reconnect on resume if the socket dropped while paused.
-
-        Auto-reconnect normally keeps the connection alive, but if it exhausted
-        its retries during a long pause the socket may be closed. Re-issue
-        ``connect()`` on the existing (running) reactor via ``callFromThread``;
-        the reactor is already running so this opens a fresh WebSocket without
-        attempting a reactor restart. Never raises — resume must not fail here.
-        """
-        try:
-            if self._ws is None or self._ws.is_connected():
-                return
-            from twisted.internet import reactor
-            if reactor.running:
-                reactor.callFromThread(self._ws.connect, threaded=True)
-                logger.info('"DataFeed reconnect requested on running reactor"')
-        except Exception as exc:
-            logger.error(f'"DataFeed reconnect attempt failed: {exc}"')
 
     def stop(self) -> None:
         """Pause the live feed.
