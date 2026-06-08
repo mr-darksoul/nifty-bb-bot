@@ -359,5 +359,11 @@ class DataFeed:
         return self._running
 
     @property
+    def candle_count(self) -> int:
+        """Number of completed candles currently held — used to decide whether
+        a warm-up is still needed on bot start."""
+        return len(self.builder._candles)
+
+    @property
     def last_price(self) -> float:
         return self.builder.last_price

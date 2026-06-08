@@ -516,6 +516,45 @@ async def _bot_loop() -> None:
         logger.info('"Bot loop exited"')
 
 
+def _warm_up_from_kite() -> None:
+    """Pre-populate the candle builder with recent 1-min history from Kite so the
+    signal pipeline (and the dashboard's nifty_price) goes live within a minute
+    of bot start — instead of waiting ~20 min to accumulate the candles
+    process_candle needs (len(df) >= 20).
+
+    The bundled CSV warm-up at app startup is excluded from the Cloud Run image
+    (.dockerignore) and runs before Kite login anyway, so this is the reliable
+    path. Blocking Kite I/O — call via asyncio.to_thread. Non-fatal: any failure
+    just falls back to live-candle accumulation. Skips if history already present
+    (e.g. a Stop→Start resume), so it never duplicates candles.
+    """
+    try:
+        if data_feed.candle_count >= 20:
+            return
+        from datetime import timedelta
+        from auth import get_kite
+        from config import NIFTY_INDEX_TOKEN, KITE_HISTORICAL_INTERVAL
+
+        kite = get_kite()
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=2)
+        records = kite.historical_data(
+            instrument_token=NIFTY_INDEX_TOKEN,
+            from_date=from_dt,
+            to_date=to_dt,
+            interval=KITE_HISTORICAL_INTERVAL,
+        )
+        if not records:
+            logger.warning('"Kite warm-up: no historical candles returned"')
+            return
+        df = pd.DataFrame(records)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date").sort_index()[["open", "high", "low", "close", "volume"]]
+        data_feed.warm_up(df.tail(500))
+    except Exception as exc:
+        logger.warning(f'"Kite warm-up from historical_data failed: {exc}"')
+
+
 async def _start_bot() -> None:
     global _bot_task, _stop_event, _event_loop, _last_signal_bar_ts
     # Guard against rapid double-starts: the endpoint also checks bot_running,
@@ -537,6 +576,9 @@ async def _start_bot() -> None:
         # "running" with a dead/absent feed.
         state.bot_running = False
         raise
+    # Warm up candle history from Kite (token is now present) so the pipeline is
+    # live within a minute instead of after ~20 min of accumulation.
+    await asyncio.to_thread(_warm_up_from_kite)
     _bot_task = asyncio.create_task(_bot_loop())
     logger.info('"Bot started"')
 
