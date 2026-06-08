@@ -160,9 +160,49 @@ class DataFeed:
         # once. The reactor is process-global and single-shot, so we launch it
         # at most once and reuse it for every subsequent start.
         self._thread_started = False
+        # The Kite access token baked into the current `_ws`'s socket URL.
+        # Zerodha tokens expire daily and change on re-login, so on resume we
+        # compare against the live token and rebuild the ticker if it rotated.
+        self._ws_token = None
 
     def register_candle_callback(self, fn: Callable[[pd.DataFrame], None]) -> None:
         self.builder.register_callback(fn)
+
+    # ── KiteTicker callbacks (bound methods so a rebuilt ticker can reuse them) ──
+
+    def _on_ticks(self, ws, ticks) -> None:
+        # Drop ticks while paused so a "stopped" bot builds no candles and fires
+        # no callbacks, even though the socket stays connected.
+        if not self._running:
+            return
+        for tick in ticks:
+            self.builder.on_tick(tick)
+
+    def _on_connect(self, ws, response) -> None:
+        ws.subscribe([NIFTY_INDEX_TOKEN])
+        ws.set_mode(ws.MODE_FULL, [NIFTY_INDEX_TOKEN])
+        logger.info(f'"WebSocket connected, subscribed to {NIFTY_SYMBOL}"')
+
+    def _on_close(self, ws, code, reason) -> None:
+        # Do NOT flip `_running` here: a transient close is followed by
+        # KiteTicker's auto-reconnect, and `_running` reflects user intent,
+        # not socket state. Flipping it would falsely mark the feed stopped.
+        logger.warning(f'"WebSocket closed: code={code} reason={reason}"')
+
+    def _on_error(self, ws, code, reason) -> None:
+        logger.error(f'"WebSocket error: code={code} reason={reason}"')
+
+    def _build_ws(self, api_key: str, access_token: str):
+        """Construct a KiteTicker wired to this feed's callbacks. The token is
+        baked into the socket URL at construction, so a new token needs a new
+        ticker."""
+        from kiteconnect import KiteTicker
+        ws = KiteTicker(api_key, access_token)
+        ws.on_ticks = self._on_ticks
+        ws.on_connect = self._on_connect
+        ws.on_close = self._on_close
+        ws.on_error = self._on_error
+        return ws
 
     def start(self) -> None:
         """Start (or resume) the live feed.
@@ -172,22 +212,18 @@ class DataFeed:
         without restarting it. Idempotent: a redundant start while already
         running is a no-op warning, so rapid double-starts cannot spawn a second
         ticker thread or crash the reactor.
+
+        A valid Kite access token is required on every start (including resume):
+        if the token rotated since the ticker was built (daily expiry / a
+        re-login), the ticker is rebuilt with the fresh token and reconnected on
+        the already-running reactor, so a re-login + restart actually recovers
+        ticks instead of silently reconnecting with a dead token.
         """
         if self._running:
             logger.warning('"DataFeed already running"')
             return
 
-        # Resume path: reactor/WS thread already launched earlier in this
-        # process. Just re-enable tick processing; the connection has been kept
-        # alive (KiteTicker auto-reconnects), so no reactor restart is needed.
-        if self._thread_started:
-            self._running = True
-            logger.info('"DataFeed resumed (reactor kept alive)"')
-            self._ensure_connected()
-            return
-
         from auth import get_kite
-        from kiteconnect import KiteTicker
 
         kite = get_kite()
         api_key = kite.api_key
@@ -196,35 +232,24 @@ class DataFeed:
         if not access_token:
             raise RuntimeError("No access token available — complete Kite login first")
 
-        self._ws = KiteTicker(api_key, access_token)
+        # Resume path: reactor/WS thread already launched earlier in this process.
+        if self._thread_started:
+            self._running = True
+            if access_token != self._ws_token:
+                # Token rotated since the ticker was built. The token lives in
+                # KiteTicker's socket URL, so reusing the old ticker would
+                # reconnect with a dead token. Rebuild with the fresh token and
+                # connect on the ALREADY-running reactor (never restarting it).
+                logger.info('"DataFeed resume: Kite token changed — rebuilding ticker"')
+                self._reconnect_with_new_token(api_key, access_token)
+            else:
+                logger.info('"DataFeed resumed (reactor kept alive)"')
+                self._ensure_connected()
+            return
 
-        def on_ticks(ws, ticks):
-            # Drop ticks while paused so a "stopped" bot builds no candles and
-            # fires no callbacks, even though the socket stays connected.
-            if not self._running:
-                return
-            for tick in ticks:
-                self.builder.on_tick(tick)
-
-        def on_connect(ws, response):
-            ws.subscribe([NIFTY_INDEX_TOKEN])
-            ws.set_mode(ws.MODE_FULL, [NIFTY_INDEX_TOKEN])
-            logger.info(f'"WebSocket connected, subscribed to {NIFTY_SYMBOL}"')
-
-        def on_close(ws, code, reason):
-            # Do NOT flip `_running` here: a transient close is followed by
-            # KiteTicker's auto-reconnect, and `_running` reflects user intent,
-            # not socket state. Flipping it would falsely mark the feed stopped.
-            logger.warning(f'"WebSocket closed: code={code} reason={reason}"')
-
-        def on_error(ws, code, reason):
-            logger.error(f'"WebSocket error: code={code} reason={reason}"')
-
-        self._ws.on_ticks = on_ticks
-        self._ws.on_connect = on_connect
-        self._ws.on_close = on_close
-        self._ws.on_error = on_error
-
+        # First start: build the ticker and launch the reactor thread once.
+        self._ws = self._build_ws(api_key, access_token)
+        self._ws_token = access_token
         self._running = True
         self._thread_started = True
         thread = threading.Thread(
@@ -235,6 +260,50 @@ class DataFeed:
         )
         thread.start()
         logger.info('"DataFeed WebSocket thread started"')
+
+    def _reconnect_with_new_token(self, api_key: str, access_token: str) -> None:
+        """Swap in a freshly-built ticker carrying the new token and connect it
+        on the already-running reactor.
+
+        The old ticker's stale-token auto-reconnect is halted and its socket
+        closed (``stop_retry`` + ``_close``) — but the reactor itself is NEVER
+        stopped, preserving the single-reactor invariant. Never raises.
+        """
+        old = self._ws
+        new = self._build_ws(api_key, access_token)
+        self._ws = new
+        self._ws_token = access_token
+
+        def _swap():
+            # Runs in the reactor thread (via callFromThread): safe to touch
+            # Twisted protocol/factory state here.
+            try:
+                if old is not None:
+                    old.stop_retry()          # stop stale-token reconnect attempts
+                    old._close(reason="token rotated")
+            except Exception as exc:
+                logger.error(f'"Old ticker close failed: {exc}"')
+            try:
+                # Reactor is already running, so connect() just opens a fresh
+                # WebSocket and does NOT attempt to start the reactor.
+                new.connect(threaded=True)
+            except Exception as exc:
+                logger.error(f'"Ticker reconnect (new token) failed: {exc}"')
+
+        try:
+            from twisted.internet import reactor
+            if reactor.running:
+                reactor.callFromThread(_swap)
+            else:
+                # Anomaly: thread was started but the reactor isn't running.
+                # Launch connect in a thread (connect() will start it) as a
+                # best-effort recovery.
+                threading.Thread(
+                    target=new.connect, kwargs={"threaded": True},
+                    daemon=True, name="kite-websocket",
+                ).start()
+        except Exception as exc:
+            logger.error(f'"DataFeed token-rotation reconnect failed: {exc}"')
 
     def _ensure_connected(self) -> None:
         """Best-effort reconnect on resume if the socket dropped while paused.

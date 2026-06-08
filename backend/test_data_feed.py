@@ -59,6 +59,7 @@ class FakeTicker:
         self.connect_calls = 0
         self.stop_calls = 0
         self.close_calls = 0
+        self.stop_retry_calls = 0
         self.on_ticks = None
         self.on_connect = None
         self.on_close = None
@@ -76,6 +77,12 @@ class FakeTicker:
         # This is the dangerous call (reactor.stop()) that must never happen.
         self.stop_calls += 1
 
+    def stop_retry(self):
+        self.stop_retry_calls += 1
+
+    def _close(self, *a, **k):
+        self.close_calls += 1
+
     def close(self, *a, **k):
         self.close_calls += 1
 
@@ -90,11 +97,13 @@ class DataFeedLifecycleTest(unittest.TestCase):
     def setUp(self):
         FakeTicker.instances.clear()
         self.feed = data_feed.DataFeed()
-        fake_kite = SimpleNamespace(api_key="k", access_token="t")
+        # Mutable so a test can simulate a Kite token rotation (daily expiry /
+        # re-login) by reassigning access_token between stop() and start().
+        self.fake_kite = SimpleNamespace(api_key="k", access_token="t")
         # auth and kiteconnect are imported lazily inside DataFeed.start();
         # patch them at their source modules so the import picks up the fakes.
         self._patches = [
-            mock.patch("auth.get_kite", return_value=fake_kite, create=True),
+            mock.patch("auth.get_kite", return_value=self.fake_kite, create=True),
             mock.patch("kiteconnect.KiteTicker", FakeTicker, create=True),
         ]
         for p in self._patches:
@@ -148,6 +157,38 @@ class DataFeedLifecycleTest(unittest.TestCase):
         self.feed.stop()
         self.assertFalse(self.feed.is_running)
         self.assertEqual(len(FakeTicker.instances), 0)
+
+    def test_resume_after_token_rotation_rebuilds_ticker(self):
+        # Real-world daily flow: bot runs with this morning's token, the token
+        # expires, the user re-logs in (new token), then Stop→Start. The feed
+        # must rebuild the ticker with the FRESH token, not reuse the dead one.
+        self.feed.start()
+        self.assertEqual(len(FakeTicker.instances), 1)
+        first = FakeTicker.instances[0]
+        self.assertEqual(first.access_token, "t")
+
+        self.feed.stop()
+        self.fake_kite.access_token = "new-token"   # simulate re-login
+        self.feed.start()
+
+        # A second ticker was built carrying the new token, and it is now active.
+        self.assertEqual(len(FakeTicker.instances), 2)
+        second = FakeTicker.instances[1]
+        self.assertEqual(second.access_token, "new-token")
+        self.assertIs(self.feed._ws, second)
+        self.assertEqual(self.feed._ws_token, "new-token")
+        self.assertTrue(self.feed.is_running)
+
+        # The reactor was never stopped — not for the old ticker, not the new.
+        self.assertEqual(first.stop_calls, 0)
+        self.assertEqual(second.stop_calls, 0)
+
+    def test_resume_same_token_does_not_rebuild(self):
+        # Ordinary Stop→Start with an unchanged token must reuse the one ticker.
+        self.feed.start()
+        self.feed.stop()
+        self.feed.start()
+        self.assertEqual(len(FakeTicker.instances), 1)
 
     def test_repeated_stop_start_cycles(self):
         self.feed.start()
