@@ -26,6 +26,7 @@ from config import (
     REGIME_MODEL_PATH,
     SIGNAL_FILTER_MODEL_PATH,
     TRADE_LOG_PATH,
+    USE_SIGNAL_FUSION,
     load_optimized_params,
     save_params,
 )
@@ -87,6 +88,10 @@ class BotState:
     def __init__(self) -> None:
         self.bot_running: bool = False
         self.market_open: bool = False
+        # Runtime toggle for the multi-source Signal Fusion overlay. Defaults to
+        # the config/env value; flippable live via POST /config/fusion. When OFF
+        # the live bot trades the raw BB %b strategy, matching the backtester.
+        self.use_signal_fusion: bool = USE_SIGNAL_FUSION
         self.regime: int = -1
         self.regime_name: str = "UNKNOWN"
         self.active_trade: Optional[Dict] = None
@@ -207,6 +212,7 @@ async def get_status() -> Dict:
     return {
         "bot_running": state.bot_running,
         "dry_run": DRY_RUN,
+        "use_signal_fusion": state.use_signal_fusion,
         "market_open": state.market_open,
         "regime": state.regime,
         "regime_name": state.regime_name,
@@ -575,6 +581,23 @@ async def stop_bot() -> Dict:
     except Exception as exc:
         logger.error(f'"Bot stop failed: {exc}"', exc_info=True)
         raise HTTPException(status_code=500, detail="Bot stop failed — check server logs")
+
+
+@app.post("/config/fusion", dependencies=[Depends(require_api_token)])
+async def set_fusion(body: Dict) -> Dict:
+    """Toggle the Signal Fusion overlay live.
+
+    Body: { "enabled": bool }. When OFF the bot trades the raw BB %b strategy
+    (matches the backtester); when ON it additionally requires fusion approval.
+    Takes effect on the next candle — no restart needed. Runtime-only: resets to
+    the config/env default on container restart.
+    """
+    if "enabled" not in body:
+        raise HTTPException(status_code=400, detail="Missing 'enabled' (bool)")
+    enabled = bool(body["enabled"])
+    state.use_signal_fusion = enabled
+    logger.info(f'"Signal Fusion toggled {"ON" if enabled else "OFF"} via API"')
+    return {"use_signal_fusion": state.use_signal_fusion}
 
 
 @app.get("/auth/login-url", dependencies=[Depends(require_api_token)])

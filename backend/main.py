@@ -288,7 +288,7 @@ async def process_candle(df: pd.DataFrame) -> None:
     # proximity into a single confidence score. Entry fires only when score ≥
     # threshold (default 60/100). This is the main quality filter targeting
     # the 70% win-rate goal.
-    if USE_SIGNAL_FUSION and _FUSION_AVAILABLE:
+    if state.use_signal_fusion and _FUSION_AVAILABLE:
         try:
             mtf_snap = _mtf_snapshot(df)
             ms = get_market_structure(df1)
@@ -485,7 +485,7 @@ def _end_of_day_summary() -> None:
 async def _bot_loop() -> None:
     """Main async trading loop: waits for candle events and runs the pipeline."""
     state.bot_running = True
-    logger.info(f'"Bot loop started (DRY_RUN={DRY_RUN} FUSION={USE_SIGNAL_FUSION})"')
+    logger.info(f'"Bot loop started (DRY_RUN={DRY_RUN} FUSION={state.use_signal_fusion})"')
 
     try:
         while not _stop_event.is_set():

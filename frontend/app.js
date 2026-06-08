@@ -19,6 +19,7 @@ let btEquitySeries = null;
 // stream ({ time, open, high, low, close }). Reset whenever the chart is
 // repainted from /candles so it re-forms cleanly against fresh history.
 let liveBar = null;
+let fusionEnabled = false;   // mirrors backend state.use_signal_fusion (from /status)
 let tvChart = null;
 let btEquityChart = null;
 
@@ -71,19 +72,19 @@ function tsToUnix(iso) {
 function pbColour(pb) {
   const v = parseFloat(pb);
   if (isNaN(v)) return "var(--muted)";
-  if (v < 0.1)  return "#f85149";   // oversold → red
-  if (v > 0.9)  return "#f85149";   // overbought → red
-  if (v < 0.3)  return "#d29922";   // approaching oversold → yellow
-  if (v > 0.7)  return "#d29922";   // approaching overbought → yellow
-  return "#3fb950";                  // neutral → green
+  if (v < 0.1)  return "#ff4d4d";   // oversold → red
+  if (v > 0.9)  return "#ff4d4d";   // overbought → red
+  if (v < 0.3)  return "#ffd23f";   // approaching oversold → yellow
+  if (v > 0.7)  return "#ffd23f";   // approaching overbought → yellow
+  return "#29d967";                  // neutral → green
 }
 
 function scoreColour(s) {
   const v = parseFloat(s);
   if (isNaN(v)) return "var(--muted)";
-  if (v >= 0.75) return "#3fb950";
-  if (v >= 0.60) return "#d29922";
-  return "#f85149";
+  if (v >= 0.75) return "#29d967";
+  if (v >= 0.60) return "#ffd23f";
+  return "#ff4d4d";
 }
 
 // ── Regime badge ──────────────────────────────────────────────────────────────
@@ -117,8 +118,39 @@ function updateHeader(data) {
     const chgEl = el("hdr-change");
     chgEl.textContent = `${sign}${fmt(chg,2)} (${sign}${pct}%)`;
     chgEl.className   = "price-change " + (chg >= 0 ? "up" : "down");
+    flash("hdr-price", chg);
   }
   if (price) prevPrice = price;
+}
+
+// Brief Bloomberg-style cell flash when a value ticks (green up / red down).
+function flash(id, dir) {
+  const e = el(id);
+  if (!e) return;
+  e.classList.remove("flash-up", "flash-dn");
+  void e.offsetWidth;                         // restart the animation
+  e.classList.add(dir >= 0 ? "flash-up" : "flash-dn");
+}
+
+// IST clock + date, mirrored to the command line and the status bar.
+function tickClock() {
+  const now = new Date();
+  const t = now.toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour12: false });
+  const d = now.toLocaleDateString("en-GB", {
+    timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short", year: "numeric",
+  }).toUpperCase();
+  const set = (id, v) => { const x = el(id); if (x) x.textContent = v; };
+  set("hdr-clock", t);
+  set("foot-clock", t);
+  set("hdr-date", d);
+}
+
+// Reflect feed health in the bottom status bar.
+function setFootState(live, text) {
+  const dot = el("foot-dot");
+  if (dot) dot.className = "foot-dot " + (live ? "live" : "down");
+  const lbl = el("foot-state");
+  if (lbl) lbl.textContent = text;
 }
 
 function updateBotBadge(running, marketOpen) {
@@ -258,24 +290,24 @@ function updateControls(status) {
 function initChart() {
   const container = el("tv-chart");
   tvChart = LightweightCharts.createChart(container, {
-    layout:     { background: { color: "#0d1117" }, textColor: "#8b949e" },
-    grid:       { vertLines: { color: "#21262d" }, horzLines: { color: "#21262d" } },
+    layout:     { background: { color: "#000000" }, textColor: "#6c7682", fontFamily: "'IBM Plex Mono', monospace" },
+    grid:       { vertLines: { color: "#101317" }, horzLines: { color: "#101317" } },
     crosshair:  { mode: LightweightCharts.CrosshairMode.Normal },
-    rightPriceScale: { borderColor: "#30363d" },
-    timeScale:  { borderColor: "#30363d", timeVisible: true, secondsVisible: false },
+    rightPriceScale: { borderColor: "#262b33" },
+    timeScale:  { borderColor: "#262b33", timeVisible: true, secondsVisible: false },
     width:  container.clientWidth,
     height: container.clientHeight,
   });
 
   candleSeries = tvChart.addCandlestickSeries({
-    upColor:   "#3fb950", downColor: "#f85149",
-    borderUpColor: "#3fb950", borderDownColor: "#f85149",
-    wickUpColor: "#3fb950", wickDownColor: "#f85149",
+    upColor:   "#29d967", downColor: "#ff4d4d",
+    borderUpColor: "#29d967", borderDownColor: "#ff4d4d",
+    wickUpColor: "#29d967", wickDownColor: "#ff4d4d",
   });
 
-  bbUpperSeries = tvChart.addLineSeries({ color: "rgba(88,166,255,0.5)", lineWidth: 1, title: "BB Upper" });
-  bbMidSeries   = tvChart.addLineSeries({ color: "rgba(88,166,255,0.8)", lineWidth: 1, lineStyle: 2, title: "BB Mid" });
-  bbLowSeries   = tvChart.addLineSeries({ color: "rgba(88,166,255,0.5)", lineWidth: 1, title: "BB Lower" });
+  bbUpperSeries = tvChart.addLineSeries({ color: "rgba(255,176,59,0.45)", lineWidth: 1, title: "BB Upper" });
+  bbMidSeries   = tvChart.addLineSeries({ color: "rgba(255,158,27,0.85)", lineWidth: 1, lineStyle: 2, title: "BB Mid" });
+  bbLowSeries   = tvChart.addLineSeries({ color: "rgba(255,176,59,0.45)", lineWidth: 1, title: "BB Lower" });
 
   // Resize observer
   new ResizeObserver(() => {
@@ -328,7 +360,7 @@ function addTradeMarker(time, direction, markerType) {
     {
       time:     t,
       position: direction === "CE" ? "belowBar" : "aboveBar",
-      color:    isEntry ? "#3fb950" : (isSL ? "#f85149" : "#d29922"),
+      color:    isEntry ? "#29d967" : (isSL ? "#ff4d4d" : "#ffd23f"),
       shape:    isEntry ? "arrowUp"  : (isSL ? "circle"  : "arrowDown"),
       text:     isEntry ? `▲ ${direction}` : (isSL ? "✕ SL" : "▼ Exit"),
     },
@@ -341,19 +373,19 @@ function initBacktestChart() {
   const c = el("backtest-equity-chart");
   if (!c || btEquityChart) return;
   btEquityChart = LightweightCharts.createChart(c, {
-    layout:     { background: { color: "#161b22" }, textColor: "#8b949e" },
-    grid:       { vertLines: { color: "#21262d" }, horzLines: { color: "#21262d" } },
-    rightPriceScale: { borderColor: "#30363d" },
-    timeScale:  { borderColor: "#30363d", timeVisible: true },
+    layout:     { background: { color: "#0a0c0f" }, textColor: "#6c7682", fontFamily: "'IBM Plex Mono', monospace" },
+    grid:       { vertLines: { color: "#101317" }, horzLines: { color: "#101317" } },
+    rightPriceScale: { borderColor: "#262b33" },
+    timeScale:  { borderColor: "#262b33", timeVisible: true },
     width:  c.clientWidth,
     height: 120,
     handleScroll: false,
     handleScale:  false,
   });
   btEquitySeries = btEquityChart.addAreaSeries({
-    lineColor: "#388bfd",
-    topColor:  "rgba(56,139,253,0.3)",
-    bottomColor: "rgba(56,139,253,0.01)",
+    lineColor: "#ff9e1b",
+    topColor:  "rgba(255,158,27,0.28)",
+    bottomColor: "rgba(255,158,27,0.01)",
     lineWidth: 2,
   });
 }
@@ -495,7 +527,8 @@ async function connectWS() {
 
   ws.onopen = () => {
     el("conn-dot").className   = "connected";
-    el("conn-label").textContent = "WS ●";
+    el("conn-label").textContent = "LIVE";
+    setFootState(true, "LIVE — MARKET DATA STREAMING");
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
   };
 
@@ -518,10 +551,11 @@ async function connectWS() {
     }
   };
 
-  ws.onerror  = () => { el("conn-dot").className = "error"; };
+  ws.onerror  = () => { el("conn-dot").className = "error"; setFootState(false, "FEED ERROR"); };
   ws.onclose  = () => {
     el("conn-dot").className   = "error";
     el("conn-label").textContent = "WS ✗";
+    setFootState(false, "DISCONNECTED — RETRYING…");
     wsRetryTimer = setTimeout(connectWS, 5000);
   };
 }
@@ -600,6 +634,10 @@ async function pollStatus() {
       dryEl.textContent = s.dry_run ? "ON" : "LIVE";
       dryEl.style.color = s.dry_run ? "var(--yellow, #d29922)" : "var(--red, #f85149)";
     }
+    if (typeof s.use_signal_fusion === "boolean") {
+      fusionEnabled = s.use_signal_fusion;
+      applyBadge("fusion-toggle", fusionEnabled ? "ON" : "OFF", fusionEnabled ? "green" : "muted");
+    }
   } catch (e) { /* ignore — WS gives the same info */ }
 }
 
@@ -631,6 +669,16 @@ el("btn-stop").addEventListener("click", async () => {
     await postJSON("/bot/stop");
     toast("Bot stopped", "ok");
   } catch (e) { toast("Failed to stop bot: " + e.message, "error"); }
+});
+
+el("fusion-toggle").addEventListener("click", async () => {
+  const next = !fusionEnabled;
+  try {
+    const r = await postJSON("/config/fusion", { enabled: next });
+    fusionEnabled = !!r.use_signal_fusion;
+    applyBadge("fusion-toggle", fusionEnabled ? "ON" : "OFF", fusionEnabled ? "green" : "muted");
+    toast("Signal Fusion " + (fusionEnabled ? "ON (quality filter)" : "OFF (raw strategy = backtest)"), "ok");
+  } catch (e) { toast("Failed to toggle fusion: " + e.message, "error"); }
 });
 
 el("btn-run-bt").addEventListener("click", async () => {
@@ -714,15 +762,51 @@ el("btn-submit-token").addEventListener("click", async () => {
   } catch (e) { toast("Auth failed: " + e.message, "error"); }
 });
 
+// ── Function keys ───────────────────────────────────────────────────────────────
+// The Bloomberg-style coloured keys mirror the in-panel buttons: clicking a key
+// (or pressing F1–F6) triggers the corresponding control's existing handler.
+const FKEY_MAP = {
+  start:    "btn-start",
+  stop:     "btn-stop",
+  backtest: "btn-run-bt",
+  login:    "btn-get-url",
+  reload:   "btn-reload-model",
+  save:     "btn-save-params",
+};
+const FKEY_ORDER = ["start", "stop", "backtest", "login", "reload", "save"];
+
+function triggerFkey(action) {
+  const target = el(FKEY_MAP[action]);
+  if (target) target.click();
+}
+
+function wireFunctionKeys() {
+  document.querySelectorAll(".fkey[data-fk]").forEach((btn) => {
+    btn.addEventListener("click", () => triggerFkey(btn.dataset.fk));
+  });
+  document.addEventListener("keydown", (e) => {
+    const m = /^F([1-6])$/.exec(e.key);
+    if (!m) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;  // don't hijack while typing
+    e.preventDefault();
+    triggerFkey(FKEY_ORDER[parseInt(m[1], 10) - 1]);
+  });
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 function bootstrap() {
+  tickClock();
+  wireFunctionKeys();
   initChart();
   loadCandles();
   connectWS();
   loadModelStatus();
   pollStatus();
   pollTrades();
+
+  setInterval(tickClock, 1000);
 
   // Poll REST every 5 seconds
   setInterval(pollStatus, 5000);

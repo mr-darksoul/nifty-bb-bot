@@ -149,7 +149,10 @@ MEAN_REVERSION_PARAMS: dict = {
 # VWAP position, options OI/PCR, news sentiment, and S/R proximity.
 # Target: 70% win rate at 1:3 R:R. Trades will be fewer but higher quality.
 # Disable to revert to pure BB %b momentum strategy.
-USE_SIGNAL_FUSION: bool = os.getenv("USE_SIGNAL_FUSION", "true").lower() in ("true", "1", "yes")
+# Default OFF so the LIVE bot matches the backtester (which does NOT apply
+# fusion). Flip on at runtime via the dashboard toggle (POST /config/fusion),
+# or set the USE_SIGNAL_FUSION env var to start a deploy with it on.
+USE_SIGNAL_FUSION: bool = os.getenv("USE_SIGNAL_FUSION", "false").lower() in ("true", "1", "yes")
 SIGNAL_FUSION_THRESHOLD: float = float(os.getenv("SIGNAL_FUSION_THRESHOLD", "60.0"))
 
 # Optional NewsAPI key for broader news sentiment coverage (free tier: 100 req/day)
