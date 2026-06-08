@@ -537,7 +537,12 @@ def _warm_up_from_kite() -> None:
 
         kite = get_kite()
         to_dt = datetime.now()
-        from_dt = to_dt - timedelta(days=2)
+        # Span ~8 calendar days so the window always covers multiple trading
+        # days even across weekends/holidays (a 2-day window on a Monday only
+        # caught the weekend → ~169 candles ≈ 11 fifteen-min bars, below the
+        # 21-bar minimum process_candle needs, so entries weren't evaluated
+        # until mid-afternoon). 8 days → ample history → tail(500) → 33+ bars.
+        from_dt = to_dt - timedelta(days=8)
         records = kite.historical_data(
             instrument_token=NIFTY_INDEX_TOKEN,
             from_date=from_dt,
