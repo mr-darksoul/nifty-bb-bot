@@ -518,10 +518,25 @@ async def _bot_loop() -> None:
 
 async def _start_bot() -> None:
     global _bot_task, _stop_event, _event_loop, _last_signal_bar_ts
+    # Guard against rapid double-starts: the endpoint also checks bot_running,
+    # but set/check it here too so two near-simultaneous /bot/start calls can't
+    # both spawn a bot loop / ticker thread. asyncio is single-threaded and
+    # there is no await before we set the flag below, so the second caller sees
+    # it already True and bails out.
+    if state.bot_running:
+        logger.warning('"_start_bot called while already running — ignoring"')
+        return
     _event_loop = asyncio.get_running_loop()
     _last_signal_bar_ts = None
     _stop_event.clear()
-    data_feed.start()
+    state.bot_running = True
+    try:
+        data_feed.start()
+    except Exception:
+        # Roll back the flag so a failed start doesn't leave the bot wedged as
+        # "running" with a dead/absent feed.
+        state.bot_running = False
+        raise
     _bot_task = asyncio.create_task(_bot_loop())
     logger.info('"Bot started"')
 

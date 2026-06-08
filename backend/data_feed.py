@@ -137,20 +137,53 @@ class CandleBuilder:
 class DataFeed:
     """
     Manages the Kite WebSocket connection and routes ticks to CandleBuilder.
+
+    Lifecycle note (important): KiteTicker runs on Twisted's reactor, and the
+    reactor cannot be restarted once stopped within the same process. So we
+    deliberately never call ``KiteTicker.stop()`` (which calls ``reactor.stop()``).
+    Instead the reactor/WebSocket thread is launched exactly once per process and
+    the connection is kept alive across bot stop→start cycles. ``stop()`` pauses
+    tick processing (``_running`` flag) rather than tearing down the reactor, and
+    ``start()`` resumes it. This makes the Stop→Start dashboard flow safe; the old
+    behaviour raised ``twisted.internet.error.ReactorNotRestartable`` and left a
+    dead ticker thread reporting ``bot_running: True`` with zero ticks.
     """
 
     def __init__(self) -> None:
         self.builder = CandleBuilder()
         self._ws = None
+        # `_running` is user intent: whether ticks should be fed to the builder.
+        # It is NOT the WebSocket/reactor connection state — the connection is
+        # kept alive while paused so it can be resumed without a reactor restart.
         self._running = False
+        # `_thread_started` records that the reactor/WS thread has been launched
+        # once. The reactor is process-global and single-shot, so we launch it
+        # at most once and reuse it for every subsequent start.
+        self._thread_started = False
 
     def register_candle_callback(self, fn: Callable[[pd.DataFrame], None]) -> None:
         self.builder.register_callback(fn)
 
     def start(self) -> None:
-        """Start WebSocket in a background thread."""
+        """Start (or resume) the live feed.
+
+        First call launches the KiteTicker WebSocket in a background thread.
+        Subsequent calls resume tick processing on the still-running reactor
+        without restarting it. Idempotent: a redundant start while already
+        running is a no-op warning, so rapid double-starts cannot spawn a second
+        ticker thread or crash the reactor.
+        """
         if self._running:
             logger.warning('"DataFeed already running"')
+            return
+
+        # Resume path: reactor/WS thread already launched earlier in this
+        # process. Just re-enable tick processing; the connection has been kept
+        # alive (KiteTicker auto-reconnects), so no reactor restart is needed.
+        if self._thread_started:
+            self._running = True
+            logger.info('"DataFeed resumed (reactor kept alive)"')
+            self._ensure_connected()
             return
 
         from auth import get_kite
@@ -166,6 +199,10 @@ class DataFeed:
         self._ws = KiteTicker(api_key, access_token)
 
         def on_ticks(ws, ticks):
+            # Drop ticks while paused so a "stopped" bot builds no candles and
+            # fires no callbacks, even though the socket stays connected.
+            if not self._running:
+                return
             for tick in ticks:
                 self.builder.on_tick(tick)
 
@@ -175,8 +212,10 @@ class DataFeed:
             logger.info(f'"WebSocket connected, subscribed to {NIFTY_SYMBOL}"')
 
         def on_close(ws, code, reason):
+            # Do NOT flip `_running` here: a transient close is followed by
+            # KiteTicker's auto-reconnect, and `_running` reflects user intent,
+            # not socket state. Flipping it would falsely mark the feed stopped.
             logger.warning(f'"WebSocket closed: code={code} reason={reason}"')
-            self._running = False
 
         def on_error(ws, code, reason):
             logger.error(f'"WebSocket error: code={code} reason={reason}"')
@@ -187,6 +226,7 @@ class DataFeed:
         self._ws.on_error = on_error
 
         self._running = True
+        self._thread_started = True
         thread = threading.Thread(
             target=self._ws.connect,
             kwargs={"threaded": True},
@@ -196,12 +236,35 @@ class DataFeed:
         thread.start()
         logger.info('"DataFeed WebSocket thread started"')
 
+    def _ensure_connected(self) -> None:
+        """Best-effort reconnect on resume if the socket dropped while paused.
+
+        Auto-reconnect normally keeps the connection alive, but if it exhausted
+        its retries during a long pause the socket may be closed. Re-issue
+        ``connect()`` on the existing (running) reactor via ``callFromThread``;
+        the reactor is already running so this opens a fresh WebSocket without
+        attempting a reactor restart. Never raises — resume must not fail here.
+        """
+        try:
+            if self._ws is None or self._ws.is_connected():
+                return
+            from twisted.internet import reactor
+            if reactor.running:
+                reactor.callFromThread(self._ws.connect, threaded=True)
+                logger.info('"DataFeed reconnect requested on running reactor"')
+        except Exception as exc:
+            logger.error(f'"DataFeed reconnect attempt failed: {exc}"')
+
     def stop(self) -> None:
-        """Close the WebSocket connection."""
-        if self._ws and self._running:
-            self._ws.stop()
+        """Pause the live feed.
+
+        Stops feeding ticks to the candle builder but deliberately leaves the
+        KiteTicker connection and Twisted reactor alive, so a later ``start()``
+        can resume without triggering ReactorNotRestartable.
+        """
+        if self._running:
             self._running = False
-            logger.info('"DataFeed stopped"')
+            logger.info('"DataFeed paused (connection kept alive)"')
 
     def warm_up(self, df: pd.DataFrame) -> None:
         """
