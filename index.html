@@ -3,63 +3,81 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NIFTY BB Bot — Trading Dashboard</title>
+  <title>ALAG · NIFTY Trading Terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div class="app">
 
-  <!-- ═══════════ HEADER ═══════════ -->
-  <header class="header">
-    <div class="logo">⚡ NIFTY BB</div>
-
-    <div class="price-block">
-      <span class="nifty-price" id="hdr-price">—</span>
-      <span class="price-change" id="hdr-change">—</span>
+  <!-- ═══════════════════════ TOP BAR ═══════════════════════ -->
+  <header class="topbar">
+    <div class="cmdline">
+      <span class="brand">ALAG</span>
+      <span class="cmd-prompt">NIFTY&nbsp;IDX <span class="ang">&lt;Index&gt;</span>&nbsp; GP <span class="go">&lt;GO&gt;</span><span class="caret"></span></span>
+      <div class="cmd-right">
+        <span id="hdr-date" class="cmd-date">—</span>
+        <span class="sep">│</span>
+        <span id="hdr-clock" class="cmd-clock">--:--:--</span>
+        <span class="cmd-tz">IST</span>
+      </div>
     </div>
 
-    <div class="header-badges">
-      <span class="badge muted" id="badge-market">CLOSED</span>
-      <span class="badge muted" id="badge-bot">BOT OFF</span>
-      <span class="badge muted" id="badge-regime">REGIME</span>
-      <span style="display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11px;">
-        <span id="conn-dot"></span><span id="conn-label">WS</span>
-      </span>
+    <div class="instrument">
+      <div class="instr-id">
+        <span class="instr-ticker">NIFTY&nbsp;50</span>
+        <span class="instr-tag">IDX · NSE · SPOT</span>
+      </div>
+      <div class="instr-quote">
+        <span class="nifty-price" id="hdr-price">—</span>
+        <span class="price-change" id="hdr-change">—</span>
+      </div>
+      <div class="instr-status">
+        <span class="badge muted" id="badge-market">CLOSED</span>
+        <span class="badge muted" id="badge-bot">BOT OFF</span>
+        <span class="badge muted" id="badge-regime">REGIME</span>
+        <span class="conn"><span id="conn-dot"></span><span id="conn-label">WS</span></span>
+      </div>
     </div>
   </header>
 
-  <!-- ═══════════ LEFT PANEL ═══════════ -->
+  <!-- ═══════════════════════ FUNCTION KEYS ═══════════════════════ -->
+  <nav class="fkeys">
+    <button class="fkey fkey-green" data-fk="start"><b>F1</b> Start</button>
+    <button class="fkey fkey-red"   data-fk="stop"><b>F2</b> Stop</button>
+    <button class="fkey fkey-amber" data-fk="backtest"><b>F3</b> Backtest</button>
+    <button class="fkey fkey-blue"  data-fk="login"><b>F4</b> Kite Login</button>
+    <button class="fkey fkey-grey"  data-fk="reload"><b>F5</b> Reload Model</button>
+    <button class="fkey fkey-grey"  data-fk="save"><b>F6</b> Save Params</button>
+    <span class="fkeys-spacer"></span>
+    <span class="fkeys-note">BB(20, 2σ) · 1-MIN · NIFTY WEEKLY OPTIONS</span>
+  </nav>
+
+  <!-- ═══════════════════════ LEFT RAIL ═══════════════════════ -->
   <aside class="left-panel">
 
-    <!-- Signal Panel -->
+    <!-- Signal & Indicators -->
     <div class="card">
       <div class="card-header">
         <span>Signal &amp; Indicators</span>
         <span id="signal-badge" class="badge muted">NONE</span>
       </div>
       <div class="card-body">
-        <!-- %b gauge -->
         <div class="gauge-label">
-          <span>%b (Bollinger)</span>
+          <span>%b · Bollinger</span>
           <span id="pb-value" class="text-mono">—</span>
         </div>
         <div class="gauge-wrap">
           <div class="gauge-track" id="pb-gauge" style="width:50%;background:var(--muted)"></div>
         </div>
 
-        <!-- RSI / ATR -->
-        <div class="kv-row">
-          <span class="k">RSI (14)</span>
-          <span class="v" id="rsi-value">—</span>
-        </div>
-        <div class="kv-row">
-          <span class="k">ATR (14)</span>
-          <span class="v" id="atr-value">—</span>
-        </div>
+        <div class="kv-row"><span class="k">RSI (14)</span><span class="v" id="rsi-value">—</span></div>
+        <div class="kv-row"><span class="k">ATR (14)</span><span class="v" id="atr-value">—</span></div>
 
-        <!-- ML Score -->
-        <div style="padding: 8px 0 4px;">
+        <div style="padding-top:8px;">
           <div class="gauge-label">
             <span>ML Signal Quality</span>
             <span id="score-value" class="text-mono">—</span>
@@ -71,10 +89,10 @@
       </div>
     </div>
 
-    <!-- Active Trade -->
+    <!-- Active Position -->
     <div class="card" id="active-trade-card">
       <div class="card-header">
-        <span>Active Trade</span>
+        <span>Active Position</span>
         <span id="active-trade-badge" class="badge muted">NONE</span>
       </div>
       <div class="card-body">
@@ -82,7 +100,7 @@
         <div class="kv-row"><span class="k">Symbol</span><span class="v" id="at-symbol">—</span></div>
         <div class="kv-row"><span class="k">Strike</span><span class="v" id="at-strike">—</span></div>
         <div class="kv-row"><span class="k">Entry ₹</span><span class="v" id="at-entry">—</span></div>
-        <div class="kv-row"><span class="k">%b entry</span><span class="v" id="at-pb">—</span></div>
+        <div class="kv-row"><span class="k">%b Entry</span><span class="v" id="at-pb">—</span></div>
         <div class="kv-row"><span class="k">ML Score</span><span class="v" id="at-score">—</span></div>
       </div>
     </div>
@@ -91,10 +109,10 @@
     <div class="card">
       <div class="card-header">
         <span>Strike Watch</span>
-        <span id="strike-expiry" class="text-muted" style="font-size:10px;">live</span>
+        <span id="strike-expiry" class="text-muted" style="font-size:9px;letter-spacing:1px;">LIVE</span>
       </div>
       <div class="card-body" style="padding:0;">
-        <table class="trade-table" id="strike-candidates-table" style="font-size:11px;">
+        <table class="trade-table" id="strike-candidates-table">
           <thead>
             <tr><th>Strike</th><th>Symbol</th><th>LTP ₹</th><th>Status</th></tr>
           </thead>
@@ -105,33 +123,33 @@
       </div>
     </div>
 
-    <!-- Bot Controls -->
+    <!-- Execution / Bot Control -->
     <div class="card">
-      <div class="card-header">Bot Controls</div>
+      <div class="card-header"><span>Execution Control</span></div>
       <div class="card-body">
         <div class="kv-row">
-          <span class="k">Dry Run</span>
+          <span class="k">Mode</span>
           <span class="v text-mono" id="dry-run-status">—</span>
+        </div>
+        <div class="kv-row">
+          <span class="k">Signal Fusion</span>
+          <span class="badge muted" id="fusion-toggle" style="cursor:pointer"
+                title="Click to toggle. OFF = raw BB %b strategy (matches backtest). ON = multi-source fusion quality filter.">—</span>
         </div>
         <button class="btn btn-green btn-full" id="btn-start">▶ Start Bot</button>
         <button class="btn btn-red btn-full" id="btn-stop">■ Stop Bot</button>
-        <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px;">
-          <div class="kv-row"><span class="k">Today P&amp;L</span>
-            <span class="v text-mono" id="ctrl-pnl">₹ 0.00</span></div>
-          <div class="kv-row"><span class="k">Trades Today</span>
-            <span class="v text-mono" id="ctrl-trades">0</span></div>
-        </div>
+        <div class="section-title">Session P&amp;L</div>
+        <div class="kv-row"><span class="k">Today P&amp;L</span><span class="v text-mono" id="ctrl-pnl">₹ 0.00</span></div>
+        <div class="kv-row"><span class="k">Trades Today</span><span class="v text-mono" id="ctrl-trades">0</span></div>
       </div>
     </div>
 
-    <!-- Kite Auth -->
+    <!-- Kite Session -->
     <div class="card">
-      <div class="card-header">Kite Authentication</div>
+      <div class="card-header"><span>Kite Session</span></div>
       <div class="card-body auth-url-wrap">
         <button class="btn btn-blue" id="btn-get-url">Get Login URL</button>
-        <a id="kite-login-link" href="#" target="_blank" style="display:none; font-size:11px;">
-          Open Kite Login →
-        </a>
+        <a id="kite-login-link" href="#" target="_blank" style="display:none; font-size:11px;">Open Kite Login →</a>
         <input type="text" id="request-token-input" placeholder="Paste request_token from redirect URL" />
         <button class="btn btn-muted" id="btn-submit-token">Submit Token</button>
       </div>
@@ -139,23 +157,33 @@
 
   </aside>
 
-  <!-- ═══════════ CHART AREA ═══════════ -->
-  <main class="chart-area">
-    <div id="tv-chart"></div>
+  <!-- ═══════════════════════ CENTER ═══════════════════════ -->
+  <main class="center">
+    <div class="chart-wrap">
+      <div class="chart-head">
+        <span class="chart-title">NIFTY 50</span>
+        <span class="chart-meta">1-MIN · BB(20, 2σ)</span>
+        <span class="chart-legend">
+          <span><i class="lg lg-up"></i>UP</span>
+          <span><i class="lg lg-dn"></i>DOWN</span>
+          <span><i class="lg lg-bb"></i>BANDS</span>
+        </span>
+      </div>
+      <div id="tv-chart"></div>
+    </div>
 
-    <!-- Today's trades below chart -->
-    <div class="card" style="margin:8px; max-height: 220px; overflow-y:auto;">
+    <!-- Today's Trades blotter -->
+    <div class="card blotter">
       <div class="card-header">
-        <span>Today's Trades</span>
-        <span id="today-trade-count" class="text-muted">0 trades</span>
+        <span>Trade Blotter — Today</span>
+        <span id="today-trade-count" class="text-muted" style="font-size:9px;letter-spacing:1px;">0 TRADES</span>
       </div>
       <div id="trades-table-wrap">
         <table class="trade-table">
           <thead>
             <tr>
               <th>Time</th><th>Dir</th><th>Strike</th><th>Symbol</th>
-              <th>Entry</th><th>Exit</th><th>P&amp;L</th>
-              <th>Reason</th><th>Score</th>
+              <th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th><th>Score</th>
             </tr>
           </thead>
           <tbody id="trades-tbody">
@@ -166,31 +194,30 @@
     </div>
   </main>
 
-  <!-- ═══════════ RIGHT PANEL ═══════════ -->
+  <!-- ═══════════════════════ RIGHT RAIL ═══════════════════════ -->
   <aside class="right-panel">
 
-    <!-- Model Status -->
+    <!-- Model Status + Params -->
     <div class="card">
       <div class="card-header">
-        <span>Model Status</span>
-        <button class="btn btn-muted" style="padding:2px 8px;font-size:10px;" id="btn-reload-model">↺</button>
+        <span>Model &amp; Strategy</span>
+        <button class="btn btn-muted" style="padding:1px 8px;font-size:10px;" id="btn-reload-model">↺</button>
       </div>
       <div class="card-body">
         <div class="kv-row"><span class="k">Regime Model</span><span class="v" id="ms-regime">—</span></div>
         <div class="kv-row"><span class="k">Signal Filter</span><span class="v" id="ms-filter">—</span></div>
         <div class="kv-row"><span class="k">Params Updated</span><span class="v" id="ms-params-date">—</span></div>
         <div class="kv-row"><span class="k">OOS Sharpe</span><span class="v" id="ms-sharpe">—</span></div>
-        <div style="margin-top:10px;">
-          <div class="section-title" style="padding:0 0 4px;">Strategy Parameters</div>
-          <div class="kv-row"><span class="k">bb_oversold</span><input class="param-input" id="p-oversold" type="number" step="0.001" min="0.001" max="0.499" placeholder="0.050"></div>
-          <div class="kv-row"><span class="k">bb_overbought</span><input class="param-input" id="p-overbought" type="number" step="0.001" min="0.501" max="0.999" placeholder="0.950"></div>
-          <div class="kv-row"><span class="k">bb_exit</span><input class="param-input" id="p-exit" type="number" step="0.001" min="0.001" max="0.999" placeholder="0.500"></div>
-          <div class="kv-row"><span class="k">sl_buffer</span><input class="param-input" id="p-sl" type="number" step="0.001" min="0.001" max="0.999" placeholder="0.100"></div>
-          <div class="kv-row"><span class="k">rsi_min</span><input class="param-input" id="p-rsi-min" type="number" step="1" min="0" max="99" placeholder="35"></div>
-          <div class="kv-row"><span class="k">rsi_max</span><input class="param-input" id="p-rsi-max" type="number" step="1" min="1" max="100" placeholder="65"></div>
-          <button class="btn btn-blue btn-full" id="btn-save-params" style="margin-top:8px;">Save Parameters</button>
-          <div id="params-save-status" style="font-size:10px;color:var(--muted);padding-top:4px;text-align:center;"></div>
-        </div>
+
+        <div class="section-title">Strategy Parameters</div>
+        <div class="kv-row"><span class="k">bb_oversold</span><input class="param-input" id="p-oversold" type="number" step="0.001" min="0.001" max="0.499" placeholder="0.050"></div>
+        <div class="kv-row"><span class="k">bb_overbought</span><input class="param-input" id="p-overbought" type="number" step="0.001" min="0.501" max="0.999" placeholder="0.950"></div>
+        <div class="kv-row"><span class="k">bb_exit</span><input class="param-input" id="p-exit" type="number" step="0.001" min="0.001" max="0.999" placeholder="0.500"></div>
+        <div class="kv-row"><span class="k">sl_buffer</span><input class="param-input" id="p-sl" type="number" step="0.001" min="0.001" max="0.999" placeholder="0.100"></div>
+        <div class="kv-row"><span class="k">rsi_min</span><input class="param-input" id="p-rsi-min" type="number" step="1" min="0" max="99" placeholder="35"></div>
+        <div class="kv-row"><span class="k">rsi_max</span><input class="param-input" id="p-rsi-max" type="number" step="1" min="1" max="100" placeholder="65"></div>
+        <button class="btn btn-blue btn-full" id="btn-save-params" style="margin-top:8px;">Save Parameters</button>
+        <div id="params-save-status" style="font-size:9px;color:var(--muted);padding-top:4px;text-align:center;letter-spacing:1px;"></div>
       </div>
     </div>
 
@@ -198,7 +225,7 @@
     <div class="card">
       <div class="card-header">
         <span>Backtest — Last 90d</span>
-        <button class="btn btn-muted" style="padding:2px 8px;font-size:10px;" id="btn-run-bt">Run</button>
+        <button class="btn btn-amber" style="padding:2px 10px;font-size:10px;" id="btn-run-bt">Run</button>
       </div>
       <div class="card-body">
         <div class="metric-row">
@@ -214,10 +241,10 @@
           <div class="metric-box"><div class="label">Trades/Wk</div><div class="value" id="bt-tw">—</div></div>
         </div>
         <div id="backtest-equity-chart"></div>
-        <div id="bt-status" class="text-muted" style="font-size:11px;padding-top:6px;"></div>
-        <div id="bt-price-mode" style="font-size:10px;color:var(--muted);padding-top:2px;"></div>
+        <div id="bt-status" class="text-muted" style="font-size:10px;padding-top:6px;letter-spacing:0.5px;"></div>
+        <div id="bt-price-mode" style="font-size:9px;color:var(--muted);padding-top:2px;letter-spacing:0.3px;"></div>
         <div style="margin-top:8px;max-height:220px;overflow-y:auto;">
-          <table class="trade-table" id="bt-trades-table" style="font-size:10px;display:none;">
+          <table class="trade-table" id="bt-trades-table" style="display:none;">
             <thead>
               <tr>
                 <th>Date</th><th>Entry</th><th>Exit</th><th>Dir</th><th>Strike</th>
@@ -232,6 +259,13 @@
     </div>
 
   </aside>
+
+  <!-- ═══════════════════════ STATUS BAR ═══════════════════════ -->
+  <footer class="statusbar">
+    <span class="st-left"><span id="foot-dot" class="foot-dot"></span> <span id="foot-state">CONNECTING…</span></span>
+    <span class="st-mid">ALAG TRADING TERMINAL · NIFTY BOLLINGER-BAND %b STRATEGY · ML REGIME + SIGNAL OVERLAY</span>
+    <span class="st-right"><span id="foot-clock">--:--:--</span> IST</span>
+  </footer>
 
 </div>
 
