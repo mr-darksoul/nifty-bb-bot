@@ -15,6 +15,10 @@ let bbUpperSeries = null;
 let bbMidSeries   = null;
 let bbLowSeries   = null;
 let btEquitySeries = null;
+// The currently-forming 1-minute candle, accumulated from the live price
+// stream ({ time, open, high, low, close }). Reset whenever the chart is
+// repainted from /candles so it re-forms cleanly against fresh history.
+let liveBar = null;
 let tvChart = null;
 let btEquityChart = null;
 
@@ -289,6 +293,30 @@ function pushCandle(candle) {
   if (candle.bb_lower)  bbLowSeries.update({   time: t, value: candle.bb_lower });
 }
 
+// Fold a live price tick into the forming 1-minute candle and push it to the
+// chart. Buckets to the minute (UTC epoch seconds, matching /candles bars) and
+// tracks OHLC across ticks; a new minute starts a fresh bar (appended), an
+// older-than-last time is skipped so lightweight-charts never throws.
+function updateLiveCandle(price) {
+  if (!candleSeries) return;
+  const minute = Math.floor(Date.now() / 60000) * 60;
+  if (!liveBar || minute > liveBar.time) {
+    liveBar = { time: minute, open: price, high: price, low: price, close: price };
+  } else if (minute === liveBar.time) {
+    liveBar.high  = Math.max(liveBar.high, price);
+    liveBar.low   = Math.min(liveBar.low, price);
+    liveBar.close = price;
+  } else {
+    return; // stale tick (older than current bar) — ignore
+  }
+  try {
+    candleSeries.update(liveBar);
+  } catch (_) {
+    // update() throws if `minute` precedes the last bar set by /candles
+    // (Kite history can briefly lead the clock). Skip until history catches up.
+  }
+}
+
 function addTradeMarker(time, direction, markerType) {
   if (!candleSeries) return;
   // markerType: "entry" | "exit" | "sl"
@@ -479,10 +507,11 @@ async function connectWS() {
       updateActiveTrade(data.active_trade, data.price);
       updateStrikeCandidates(data.strike_candidates);
 
-      // If there's a live price, push a synthetic candle update
+      // Accumulate the live price into the current 1-minute candle so the
+      // chart forms new bars in real time (the old code pushed a flat
+      // O=H=L=C bar at an arbitrary second, so real candles never appeared).
       if (data.price && candleSeries) {
-        const now = Math.floor(Date.now() / 1000);
-        candleSeries.update({ time: now, open: data.price, high: data.price, low: data.price, close: data.price });
+        updateLiveCandle(data.price);
       }
     } catch (e) {
       console.warn("WS parse error", e);
@@ -538,7 +567,7 @@ async function putJSON(path, body) {
 }
 
 
-async function loadCandles() {
+async function loadCandles(fit = true) {
   if (!candleSeries) return;
   try {
     const d = await fetchJSON("/candles");
@@ -553,7 +582,10 @@ async function loadCandles() {
     if (bbU.length) bbUpperSeries.setData(bbU);
     if (bbM.length) bbMidSeries.setData(bbM);
     if (bbL.length) bbLowSeries.setData(bbL);
-    tvChart.timeScale().fitContent();
+    // setData replaced every bar — drop the stale forming candle so it
+    // re-accumulates against the refreshed history on the next live tick.
+    liveBar = null;
+    if (fit) tvChart.timeScale().fitContent();
   } catch (e) { /* not authenticated yet, or market data unavailable */ }
 }
 
@@ -697,6 +729,10 @@ function bootstrap() {
   setInterval(pollTrades, 5000);
   // Refresh model status every 5 minutes
   setInterval(loadModelStatus, 300_000);
+  // Re-pull real OHLC + Bollinger Bands every 60s so completed candles get
+  // exact values (the live WS bar is only price-sampled). fit=false preserves
+  // the user's current pan/zoom.
+  setInterval(() => loadCandles(false), 60_000);
 }
 
 if (document.readyState === "loading") {
