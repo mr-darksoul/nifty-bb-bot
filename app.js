@@ -67,6 +67,14 @@ function tsToUnix(iso) {
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 
+// Lightweight Charts always renders the time axis in UTC and has no timezone
+// support. NIFTY trades in IST, so every timestamp fed to a chart series is
+// shifted by +5:30 — the rendered "UTC" labels then read as IST wall-clock.
+// Applied uniformly to history, BB bands, the live forming bar and markers so
+// all series stay aligned. Display-only: /candles still carries true epoch.
+const IST_OFFSET_SEC = 5.5 * 3600;   // 19800
+const toBarTime = (epoch) => epoch + IST_OFFSET_SEC;
+
 // ── Bollinger %b colour ───────────────────────────────────────────────────────
 
 function pbColour(pb) {
@@ -318,7 +326,7 @@ function initChart() {
 function pushCandle(candle) {
   if (!candleSeries) return;
   // candle: { time, open, high, low, close, bb_upper, bb_middle, bb_lower }
-  const t = typeof candle.time === "number" ? candle.time : tsToUnix(candle.time);
+  const t = toBarTime(typeof candle.time === "number" ? candle.time : tsToUnix(candle.time));
   candleSeries.update({ time: t, open: candle.open, high: candle.high, low: candle.low, close: candle.close });
   if (candle.bb_upper)  bbUpperSeries.update({ time: t, value: candle.bb_upper });
   if (candle.bb_middle) bbMidSeries.update({   time: t, value: candle.bb_middle });
@@ -331,7 +339,7 @@ function pushCandle(candle) {
 // older-than-last time is skipped so lightweight-charts never throws.
 function updateLiveCandle(price) {
   if (!candleSeries) return;
-  const minute = Math.floor(Date.now() / 60000) * 60;
+  const minute = Math.floor(Date.now() / 60000) * 60 + IST_OFFSET_SEC;
   if (!liveBar || minute > liveBar.time) {
     liveBar = { time: minute, open: price, high: price, low: price, close: price };
   } else if (minute === liveBar.time) {
@@ -352,7 +360,7 @@ function updateLiveCandle(price) {
 function addTradeMarker(time, direction, markerType) {
   if (!candleSeries) return;
   // markerType: "entry" | "exit" | "sl"
-  const t = typeof time === "number" ? time : tsToUnix(time);
+  const t = toBarTime(typeof time === "number" ? time : tsToUnix(time));
   const isEntry = markerType === "entry";
   const isSL    = markerType === "sl";
   candleSeries.setMarkers([
@@ -608,11 +616,11 @@ async function loadCandles(fit = true) {
     const candles = (d && d.candles) || [];
     if (!candles.length) return;
     candleSeries.setData(candles.map(c => ({
-      time: c.time, open: c.open, high: c.high, low: c.low, close: c.close,
+      time: toBarTime(c.time), open: c.open, high: c.high, low: c.low, close: c.close,
     })));
-    const bbU = candles.filter(c => c.bb_upper  != null).map(c => ({ time: c.time, value: c.bb_upper  }));
-    const bbM = candles.filter(c => c.bb_middle != null).map(c => ({ time: c.time, value: c.bb_middle }));
-    const bbL = candles.filter(c => c.bb_lower  != null).map(c => ({ time: c.time, value: c.bb_lower  }));
+    const bbU = candles.filter(c => c.bb_upper  != null).map(c => ({ time: toBarTime(c.time), value: c.bb_upper  }));
+    const bbM = candles.filter(c => c.bb_middle != null).map(c => ({ time: toBarTime(c.time), value: c.bb_middle }));
+    const bbL = candles.filter(c => c.bb_lower  != null).map(c => ({ time: toBarTime(c.time), value: c.bb_lower  }));
     if (bbU.length) bbUpperSeries.setData(bbU);
     if (bbM.length) bbMidSeries.setData(bbM);
     if (bbL.length) bbLowSeries.setData(bbL);
